@@ -53,6 +53,7 @@ class MainActivity:ComponentActivity(){
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun PocketApp(s:UiState,vm:PocketViewModel){
+    DownloadedFileLauncher(s,vm)
     var page by rememberSaveable{mutableStateOf("chat")}
     var search by rememberSaveable{mutableStateOf("")}
     var manual by remember{mutableStateOf(false)};var raw by remember{mutableStateOf("")}
@@ -139,7 +140,7 @@ class MainActivity:ComponentActivity(){
         Spacer(Modifier.height(28.dp));Button(onClick=onScan,enabled=!s.pairing,modifier=Modifier.fillMaxWidth().height(52.dp)){Icon(Icons.Rounded.QrCodeScanner,null);Spacer(Modifier.width(8.dp));Text(if(s.pairing)"正在连接…" else "扫描电脑二维码")}
         TextButton(onClick=onManual,enabled=!s.pairing,modifier=Modifier.align(Alignment.CenterHorizontally)){Text("无法扫码？粘贴配对内容")}
         s.notice?.let{Text(it,color=c.error,fontSize=13.sp)}
-        Text("个人远程工具 · 0.3.1",color=c.onSurfaceVariant,fontSize=11.sp,modifier=Modifier.padding(top=24.dp))
+        Text("个人远程工具 · 0.4.0",color=c.onSurfaceVariant,fontSize=11.sp,modifier=Modifier.padding(top=24.dp))
     }
 }
 
@@ -166,7 +167,7 @@ class MainActivity:ComponentActivity(){
         SectionLabel("外观")
         listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(value,label)->ListItem(headlineContent={Text(label)},leadingContent={RadioButton(s.theme==value,{vm.theme(value)})},modifier=Modifier.clickable{vm.theme(value)})}
         Spacer(Modifier.height(24.dp));HorizontalDivider();TextButton(onClick=onForget,modifier=Modifier.padding(top=16.dp)){Icon(Icons.Rounded.LinkOff,null);Spacer(Modifier.width(8.dp));Text("解除这台电脑的配对")}
-        Text("Codex Pocket 0.3.1\n手机与桌面共用同一聊天和操作状态。",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=24.dp))
+        Text("Codex Pocket 0.4.0\n手机与桌面共用同一聊天和操作状态。",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=24.dp))
     }
 }
 
@@ -201,7 +202,7 @@ class MainActivity:ComponentActivity(){
 
 @Composable private fun RequestCard(title:String,text:String,accept:String,decline:String,enabled:Boolean,onAccept:()->Unit,onDecline:()->Unit){OutlinedCard{Column(Modifier.padding(16.dp)){Text(title,fontWeight=FontWeight.Bold);Text(text,fontSize=13.sp,modifier=Modifier.padding(vertical=12.dp));Row{OutlinedButton(onClick=onDecline,enabled=enabled){Text(decline)};Spacer(Modifier.width(12.dp));Button(onClick=onAccept,enabled=enabled){Text(accept)}}}}}
 @Composable private fun Notice(text:String,warning:Boolean=false,onDismiss:(()->Unit)?=null){val c=MaterialTheme.colorScheme;Surface(color=if(warning)c.errorContainer else c.surfaceVariant){Row(Modifier.fillMaxWidth().padding(14.dp,10.dp),verticalAlignment=Alignment.CenterVertically){Text(text,fontSize=12.sp,lineHeight=18.sp,color=if(warning)c.onErrorContainer else c.onSurfaceVariant,modifier=Modifier.weight(1f));onDismiss?.let{IconButton(onClick=it,modifier=Modifier.size(28.dp)){Icon(Icons.Rounded.Close,"关闭提示",Modifier.size(16.dp))}}}}}
-@Composable private fun MessageCard(m:Message,vm:PocketViewModel){val user=m.role=="user";val c=MaterialTheme.colorScheme;Column(Modifier.fillMaxWidth(),horizontalAlignment=if(user)Alignment.End else Alignment.Start){if(!user)Text(if(m.role=="activity")"执行详情" else "Codex",fontSize=12.sp,fontWeight=FontWeight.SemiBold,color=c.primary,modifier=Modifier.padding(bottom=8.dp));if(m.markdown.isNotBlank())if(user)Surface(shape=RoundedCornerShape(18.dp),color=c.surfaceVariant){Text(m.markdown,Modifier.padding(16.dp,12.dp),fontSize=15.sp,lineHeight=23.sp)}else Markdown(m.markdown);m.images.forEach{RemotePicture(it,vm)}}}
+@Composable private fun MessageCard(m:Message,vm:PocketViewModel){val user=m.role=="user";val c=MaterialTheme.colorScheme;Column(Modifier.fillMaxWidth(),horizontalAlignment=if(user)Alignment.End else Alignment.Start){if(!user)Text(if(m.role=="activity")"执行详情" else "Codex",fontSize=12.sp,fontWeight=FontWeight.SemiBold,color=c.primary,modifier=Modifier.padding(bottom=8.dp));if(m.markdown.isNotBlank())if(user)Surface(shape=RoundedCornerShape(18.dp),color=c.surfaceVariant){Text(m.markdown,Modifier.padding(16.dp,12.dp),fontSize=15.sp,lineHeight=23.sp)}else Markdown(m.markdown);m.images.forEach{RemotePicture(it,vm)};m.files.forEach{GeneratedFileCard(it,vm)}}}
 @Composable private fun Markdown(text:String){
     val context=LocalContext.current;val markwon=remember(context){Markwon.create(context)};val clipboard=LocalClipboardManager.current;val c=MaterialTheme.colorScheme
     val chunks=remember(text){Regex("(?s)```([^\\n`]*)\\n(.*?)(?:```|$)").findAll(text).toList()}

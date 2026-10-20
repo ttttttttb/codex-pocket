@@ -12,7 +12,7 @@ try{
     & subst.exe $drive $bundleRoot
     if($LASTEXITCODE -ne 0){throw '无法创建构建路径映射。'}
     # Android and Gradle subprocesses on Windows require an ASCII toolchain path.
-    $env:JAVA_HOME="$drive\work\toolchain\jdk-17.0.20.1+1"
+    $env:JAVA_HOME="$drive\work\toolchain\jdk-17"
     $env:ANDROID_HOME="$drive\work\toolchain\android-sdk"
     $env:GRADLE_USER_HOME="$drive\work\toolchain\gradle-cache"
     [IO.File]::WriteAllText($properties,('sdk.dir='+$drive+'/work/toolchain/android-sdk'),[Text.UTF8Encoding]::new($false))

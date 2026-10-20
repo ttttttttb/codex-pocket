@@ -27,7 +27,7 @@ data class Session(val name: String, val url: String, val fp: String, val token:
     companion object { fun fromJson(j: JSONObject) = Session(j.getString("name"),j.getString("url"),j.getString("fp"),j.getString("token")) }
 }
 data class Chat(val id: String, val title: String, val active: Boolean, val projectId: String?=null)
-data class Message(val id: String, val role: String, val markdown: String,val images:List<Picture> = emptyList())
+data class Message(val id: String, val role: String, val markdown: String,val images:List<Picture> = emptyList(),val files:List<GeneratedFile> = emptyList())
 data class Approval(val id: String, val summary: String, val acceptLabel: String, val declineLabel: String)
 data class Project(val id:String,val title:String)
 data class ComposerSetting(val key:String,val label:String,val value:String,val enabled:Boolean,val reason:String?)
@@ -44,7 +44,7 @@ data class Snapshot(val connected:Boolean=false,val compatible:Boolean=false,val
             val menu=j.optJSONObject("menu")?.let{m->SettingMenu(m.getString("key"),m.getString("contextId"),m.getString("revision"),m.list("options"){o->SettingOption(o.getString("id"),o.getString("label"),o.optBoolean("selected"),o.optBoolean("disabled"))})}
             val confirmation=j.optJSONObject("confirmation")?.let{c->Confirmation(c.getString("id"),c.getString("summary"),c.getString("acceptLabel"),c.getString("declineLabel"))}
             return Snapshot(connected=j.optBoolean("connected"),compatible=j.optBoolean("compatible"),error=j.nullable("error"),threadId=j.nullable("threadId"),title=j.optString("title","Codex"),
-                messages=j.list("messages"){m->Message(m.getString("id"),m.getString("role"),m.getString("markdown"),m.rows("images"){Picture.parse(it)})},
+                messages=j.list("messages"){m->Message(m.getString("id"),m.getString("role"),m.getString("markdown"),m.rows("images"){Picture.parse(it)},m.rows("files"){GeneratedFile.parse(it)})},
                 chats=j.list("chats"){c->Chat(c.getString("id"),c.getString("title"),c.optBoolean("active"),c.nullable("projectId"))},
                 draftPresent=j.optBoolean("draftPresent"),busy=j.optBoolean("busy"),approvals=j.list("approvals"){a->Approval(a.getString("id"),a.getString("summary"),a.getString("acceptLabel"),a.getString("declineLabel"))},canLoadOlder=j.optBoolean("canLoadOlder"),
                 protocolVersion=j.optInt("protocolVersion",1),contextId=j.nullable("contextId")?:j.nullable("threadId"),screen=j.optString("screen","chat"),projects=j.list("projects"){p->Project(p.getString("id"),p.getString("title"))},currentProjectId=j.nullable("currentProjectId"),

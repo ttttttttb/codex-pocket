@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -24,6 +26,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.io.IOException
+import java.io.File
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -35,10 +38,13 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 data class UiState(val session: Session?=null,val socketConnected: Boolean=false,val connecting: Boolean=false,val pairing: Boolean=false,val snapshot: Snapshot=Snapshot(),val notice: String?=null,val pendingId: String?=null,val pendingUnknown: Boolean=false,val draft: String="",val clearDraftOnSuccess: Boolean=false,val theme:String="system",
-    val uploading:Boolean=false,val staged:List<StagedFile> = emptyList(),val files:FileListing?=null,val filesLoading:Boolean=false,val hiddenMenuId:String?=null){
+    val uploading:Boolean=false,val staged:List<StagedFile> = emptyList(),val files:FileListing?=null,val filesLoading:Boolean=false,val hiddenMenuId:String?=null,
+    val downloadingId:String?=null,val downloadProgress:Int=0,val openableFile:OpenableFile?=null){
     val remoteMenu:RemoteSurface? get()=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.takeIf{hiddenMenuId==null}
     fun hideMenu()=copy(hiddenMenuId=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.id?:hiddenMenuId)
 }
+
+private class FileTransferTask {@Volatile var call:okhttp3.Call?=null;var job:Job?=null}
 
 class PocketViewModel(app: Application): AndroidViewModel(app) {
     private val store=SecureStore(app)
@@ -59,6 +65,8 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
     private var pendingKind:String?=null
     private var pendingAttachContext:String?=null
     private var pendingAttachIds:List<String> = emptyList()
+    @Volatile private var downloadTask:FileTransferTask?=null
+    private val downloadMutex=Mutex()
     init { if(mutable.value.session!=null)connect() }
 
     private fun pinnedClient(fp: String): OkHttpClient {
@@ -190,6 +198,45 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
         synchronized(images){while(images.values.sumOf{it.size}+data.size>32*1024*1024&&images.isNotEmpty())images.remove(images.keys.first());if(data.size<=20*1024*1024)images[id]=data}
         return data
     }
+    fun consumeOpenable(id:String){mutable.update{if(it.openableFile?.requestId==id)it.copy(openableFile=null) else it}}
+    fun cancelDownload(){val task=downloadTask;downloadTask=null;task?.call?.cancel();task?.job?.cancel();mutable.update{it.copy(downloadingId=null,downloadProgress=0)}}
+    fun downloadFile(file:GeneratedFile,contextId:String){
+        if(mutable.value.downloadingId!=null){notice("请等待当前文件下载完成，或先取消下载。");return}
+        val session=mutable.value.session?:return
+        if(!file.available||file.size==null||file.size !in 0..DownloadPolicy.MAX){notice(file.reason?:"文件不可下载。");return}
+        val c=client?:return
+        val task=FileTransferTask();downloadTask=task
+        mutable.update{it.copy(downloadingId=file.id,downloadProgress=0,notice=null)}
+        task.job=viewModelScope.launch{
+            var partial:File?=null
+            try{
+                val ready=downloadMutex.withLock{withContext(Dispatchers.IO){
+                    if(downloadTask!==task)throw kotlinx.coroutines.CancellationException()
+                    val dir=File(getApplication<Application>().cacheDir,"downloads");dir.mkdirs();DownloadPolicy.clean(dir,file.size)
+                    val filename=UUID.randomUUID().toString()+"-"+DownloadPolicy.safeName(file.name)
+                    val temp=File(dir,filename+".part");partial=temp
+                    val url=session.url+"/api/downloads/"+file.id+"?contextId="+java.net.URLEncoder.encode(contextId,"UTF-8")
+                    val call=c.newBuilder().readTimeout(30,TimeUnit.SECONDS).callTimeout(10,TimeUnit.MINUTES).build().newCall(Request.Builder().url(url).header("Authorization","Bearer "+session.token).build());task.call=call
+                    if(downloadTask!==task){call.cancel();throw kotlinx.coroutines.CancellationException()}
+                    call.execute().use{r->
+                        if(!r.isSuccessful){val error=r.body?.source()?.readUtf8( minOf(8192L,r.body?.contentLength()?.takeIf{it>=0}?:0L))?:"";throw IOException(runCatching{JSONObject(error).optString("message","下载失败，请检查电脑连接后重试。")}.getOrDefault("下载失败，请检查电脑连接后重试。"))}
+                        val body=r.body?:throw IOException("电脑没有返回文件。")
+                        if(body.contentLength()!=file.size)throw IOException("文件大小已变化，请刷新聊天后重试。")
+                        val expectedHash=r.header("X-File-SHA256")?.lowercase()?.takeIf{it.matches(Regex("[0-9a-f]{64}"))}?:throw IOException("电脑端未提供文件校验，请更新电脑端。")
+                        val hash=java.security.MessageDigest.getInstance("SHA-256")
+                        java.security.DigestInputStream(body.byteStream(),hash).use{input->temp.outputStream().use{output->DownloadPolicy.copy(input,output,file.size){done->val percent=if(file.size==0L)100 else (done*100/file.size).toInt();if(downloadTask===task&&mutable.value.downloadProgress!=percent)mutable.update{it.copy(downloadProgress=percent)}}}}
+                        val actualHash=hash.digest().joinToString(""){"%02x".format(it)}
+                        if(actualHash!=expectedHash)throw IOException("文件校验失败，电脑文件可能正在变化，请稍后重试。")
+                    }
+                    if(downloadTask!==task||mutable.value.session!=session||call.isCanceled())throw IOException("下载已取消。")
+                    val target=File(dir,filename);if(!temp.renameTo(target))throw IOException("手机存储空间不足或文件无法保存。")
+                    partial=null;OpenableFile(target,file.mime,UUID.randomUUID().toString())
+                }}
+                if(downloadTask===task&&mutable.value.session==session)mutable.update{it.copy(openableFile=ready)}else ready.file.delete()
+            }catch(_:kotlinx.coroutines.CancellationException){}catch(e:Exception){if(downloadTask===task)notice(e.message?:"下载失败，请检查网络后重新点击文件卡片。")}
+            finally{partial?.delete();if(downloadTask===task){downloadTask=null;mutable.update{it.copy(downloadingId=null,downloadProgress=0)}}}
+        }
+    }
     fun uploadUri(uri:Uri){val key=mutable.value.snapshot.contextId?:return;if(mutable.value.uploading)return
         mutable.update{it.copy(uploading=true,notice=null)}
         viewModelScope.launch{try{
@@ -234,6 +281,6 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
         if(socket?.send(extra.toString())!=true){markUnknown();notice("发送结果待确认。请连接后检查聊天，不要重复发送。");return}
         timeout?.cancel();timeout=viewModelScope.launch{delay(12000);if(mutable.value.pendingId==id){markUnknown();notice("操作尚未确认，请检查聊天，不要重复发送。")}}
     }
-    fun forget(){dismissals.clear();generation++;reconnect?.cancel();timeout?.cancel();socket?.cancel();client?.connectionPool?.evictAll();synchronized(images){images.clear()};staged.clear();store.saveSession(null);store.savePending(null);store.savePendingContext(null);store.saveDrafts(JSONObject());drafts.keys().asSequence().toList().forEach{drafts.remove(it)};mutable.value=UiState(theme=store.theme())}
-    override fun onCleared(){generation++;reconnect?.cancel();socket?.cancel();client?.dispatcher?.executorService?.shutdown();super.onCleared()}
+    fun forget(){cancelDownload();File(getApplication<Application>().cacheDir,"downloads").deleteRecursively();dismissals.clear();generation++;reconnect?.cancel();timeout?.cancel();socket?.cancel();client?.connectionPool?.evictAll();synchronized(images){images.clear()};staged.clear();store.saveSession(null);store.savePending(null);store.savePendingContext(null);store.saveDrafts(JSONObject());drafts.keys().asSequence().toList().forEach{drafts.remove(it)};mutable.value=UiState(theme=store.theme())}
+    override fun onCleared(){cancelDownload();generation++;reconnect?.cancel();socket?.cancel();client?.dispatcher?.executorService?.shutdown();super.onCleared()}
 }

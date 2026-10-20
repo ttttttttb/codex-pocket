@@ -2,22 +2,28 @@
 
 用安卓手机继续 Windows 电脑上的同一段 Codex 聊天：查看回复、发送指令、切换聊天，使用桌面实际提供的菜单和问答控件。
 
-**非官方个人工具 · 当前版本 0.3.1 · Windows x64 + Android 8.0 及以上**
+**非官方个人工具 · 当前版本 0.4.0 · Windows x64 + Android 8.0 及以上**
 
 ## 下载与教程
 
 | 内容 | 入口 |
 | --- | --- |
-| **新用户完整安装包，约 49 MB** | [下载完整包 ZIP](https://github.com/ttttttttb/codex-pocket/releases/download/v0.3.1/Codex-Pocket-0.3.1-Full-Package.zip) |
-| 单独安卓安装包 | [下载 APK](https://github.com/ttttttttb/codex-pocket/releases/download/v0.3.1/Codex-Pocket-0.3.1.apk) |
-| 当前发布页与文件校验 | [v0.3.1 Release](https://github.com/ttttttttb/codex-pocket/releases/tag/v0.3.1) |
+| **新用户完整安装包，约 49 MB** | [下载完整包 ZIP](https://github.com/ttttttttb/codex-pocket/releases/download/v0.4.0/Codex-Pocket-0.4.0-Full-Package.zip) |
+| 单独安卓安装包 | [下载 APK](https://github.com/ttttttttb/codex-pocket/releases/download/v0.4.0/Codex-Pocket-0.4.0.apk) |
+| 当前发布页与文件校验 | [v0.4.0 Release](https://github.com/ttttttttb/codex-pocket/releases/tag/v0.4.0) |
 | **从零开始的完整中文教程** | [在线阅读安装与使用教程](docs/完整安装与使用教程.md) |
 | 常见问题 | [连接、配对、网络和菜单排错](docs/04-说明与排错/常见问题.md) |
 | 首次验收 | [真实收发和功能检查表](docs/04-说明与排错/首次安装验收清单.md) |
 
-完整包包含已签名 APK、Windows 配套程序及 Node 运行环境、源码、15 节离线 HTML 教程和排错资料。解压后先打开 **00-完整安装与使用教程.html**。日常使用无需另装 Node、JDK 或 Android SDK。
+完整包包含已签名 APK、Windows 配套程序及 Node 运行环境、源码、16 节离线 HTML 教程和排错资料。解压后先打开 **00-完整安装与使用教程.html**。日常使用无需另装 Node、JDK 或 Android SDK。
 
 完整包不附官方 Codex/Tailscale 安装器、账号、订阅或个人运行数据；按教程下载官方应用并登录自己的账号。
+
+## 手机查看电脑生成的文件
+
+0.4.0 会将助手回复中的本地文件链接显示为文件卡片。点击后下载并弹出安卓“选择应用打开”，单文件上限 100 MB；需安装相应阅读器。支持进度、取消、文件大小和 SHA-256 校验。
+
+[查看详细操作、更新方法与故障处理](docs/手机打开电脑文件.md)。本次新增功能的真实手机与当前桌面端到端验收待完成。
 
 ## 六步开始
 
@@ -39,7 +45,7 @@
 - 手机文件、电脑目录选文件、手机画板、图片预览和双指缩放；附件需明确加入聊天后手动发送。单文件最大 20 MB，目录需展开后选文件。
 - 电脑草稿保护、按聊天保留手机草稿、回执防重复、断线重连且不自动补发；停止任务需二次确认。
 
-## 0.3.1 修复
+## 0.4.0 修复
 
 - 修复关闭手机“＋”后电脑菜单残留、后续手机操作无响应；手机立即收起菜单，关闭回执与发送等待分离。
 - 通过已展开的实际入口关闭菜单，不发送可能停止任务的 Esc；无法关闭的浮层使用短超时。

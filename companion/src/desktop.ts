@@ -9,6 +9,7 @@ import {DesktopControls,readControls} from './controls.js';
 import {atomicClick} from './ui-action.js';
 import {RemoteUi} from './remote-ui.js';
 import {Transfers} from './transfers.js';
+import {GeneratedFiles,type ObservedFileLink} from './generated-files.js';
 import {emptySnapshot,SafeError,type Desktop,type Snapshot,type Operation,type OperationResult,type Message} from './types.js';
 
 const QUESTION_EXCLUSION=':not([data-codex-composer-request-navigation] *)';
@@ -17,7 +18,7 @@ const SEND=/^(?:Queue|排队|Send|Send message|Send prompt|Submit|Submit prompt|
 const STOP=/^(?:Stop|Stop task|Stop response|Stop generating|Interrupt|停止|停止任务|停止生成|停止响应|中断)(?:\s*\([^)]*\))?$/i;
 
 // These functions are serialized by Playwright; keep them independent of module scope.
-export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'version'>{
+export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'version'>&{fileLinks:ObservedFileLink[]}{
   const visible=(e:Element)=>!!(e as HTMLElement).offsetWidth&&!!(e as HTMLElement).offsetHeight;
   const tidy=(s:string)=>(s||'').replace(/\u00a0/g,' ').trim();
   const uuid=()=>crypto.randomUUID?.()||'10000000-1000-4000-8000-100000000000'.replace(/[018]/g,c=>(Number(c)^crypto.getRandomValues(new Uint8Array(1))[0]&15>>Number(c)/4).toString(16));
@@ -49,6 +50,7 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
   const sidebarChats=Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-row]')).flatMap(row=>{const id=row.getAttribute('data-app-action-sidebar-thread-id');const title=tidy(row.getAttribute('data-app-action-sidebar-thread-title')||'');return id&&title?[{id,title:title.slice(0,150),active:id===threadId,projectId:projectFor(row)}]:[]});
   const chats=[...sidebarChats,...Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).flatMap(a=>{const id=a.getAttribute('href')?.match(/\/(?:local|threads|thread)\/([^/?#]+)/)?.[1];return id&&tidy(a.innerText)?[{id,title:tidy(a.innerText).slice(0,150),active:id===threadId}]:[]})].filter((c,i,a)=>a.findIndex(x=>x.id===c.id)===i);
   const messages:Message[]=[];
+  const fileLinks:ObservedFileLink[]=[];
   const candidates=Array.from(document.querySelectorAll<HTMLElement>('[data-turn-key] [data-user-message-bubble], [data-turn-key] .markdown, [data-turn-key] .prose, [data-turn-key] [data-markdown-text-style="assistant-message"], [data-message-role], [data-content-search-unit-key] article'));
   const slots=new Map<string,number>();
   for(const el of candidates){
@@ -68,6 +70,7 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
     const slotKey=key+':'+role,slot=slots.get(slotKey)||0;slots.set(slotKey,slot+1);
     const id=slotKey+':'+slot;
     messages.push({id,role,markdown,turnId,unitId,slot,images});
+    if(role==='assistant')for(const a of el.querySelectorAll('a[href],[data-file-reference][data-markdown-copy-text]'))fileLinks.push({messageId:id,href:a.getAttribute('href')||a.getAttribute('data-markdown-copy-text')||'',label:tidy(a.textContent||'')});
   }
   for(const turn of document.querySelectorAll<HTMLElement>("[data-turn-key]")){
     if(turn.querySelector("[data-turn-key]"))continue;
@@ -92,7 +95,7 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
   const root=composer?.closest('[data-codex-composer-root]')||document.querySelector('[data-composer-footer-responsive]')||document;
   const queued=Array.from(root.querySelectorAll("button")).some(b=>visible(b)&&/^(?:Queue|排队|Steer|引导)$/i.test(b.getAttribute("aria-label")||""));
   const busy=queued||Array.from(root.querySelectorAll('button')).some(b=>visible(b)&&/^(?:Stop|Stop task|Stop response|Stop generating|Interrupt|停止|停止任务|停止生成|停止响应|中断)(?:\s*\([^)]*\))?$/i.test(tidy(b.getAttribute('aria-label')||b.textContent||'')));
-  return{threadId,title,messages,chats,draftPresent:!!tidy(composer instanceof HTMLTextAreaElement?composer.value:composer?.innerText||''),busy,approvals,canLoadOlder:!!document.querySelector('[data-turn-key]')};
+  return{threadId,title,messages,fileLinks,chats,draftPresent:!!tidy(composer instanceof HTMLTextAreaElement?composer.value:composer?.innerText||''),busy,approvals,canLoadOlder:!!document.querySelector('[data-turn-key]')};
 }
 
 export function mergeMessages(old:Message[],visible:Message[]):Message[]{
@@ -113,6 +116,7 @@ export class CodexDesktop implements Desktop {
   private controls=new DesktopControls();
   private remoteUi=new RemoteUi();
   private transfers=new Transfers();
+  private generatedFiles=new GeneratedFiles();
   private ownedDraft:{contextId:string,text:string,editable?:boolean}|null=null;
   private lastContext:string|null=null;
   private newContext:string|null=null;
@@ -156,7 +160,7 @@ export class CodexDesktop implements Desktop {
         if(other===p||other.isClosed()||(!this.fixture&&!/^(?:app|codex|file):\/\//.test(other.url())))continue;
         if(await other.locator(COMPOSER).filter({visible:true}).count())throw new SafeError('MULTIPLE_WINDOWS','检测到多个 Codex 聊天窗口，请先保留一个窗口以免操作错误。');
       }
-      const state=await p.evaluate(domSnapshot);
+      const {fileLinks,...state}=await p.evaluate(domSnapshot);
       if(!state.threadId){
         this.newContext=await p.locator(COMPOSER).filter({visible:true}).first().evaluate((e,candidate)=>{
           const owner=e.getAttribute('data-pocket-context-owner');
@@ -168,6 +172,7 @@ export class CodexDesktop implements Desktop {
       }
       this.lastContext=state.threadId;
       const contextId=state.threadId||this.newContext!;
+      await this.generatedFiles.observe(contextId,state.messages,fileLinks);
       const actualText=await p.locator(COMPOSER).filter({visible:true}).first().evaluate(e=>(e instanceof HTMLTextAreaElement?e.value:(e as HTMLElement).innerText).trim());
       if(this.ownedDraft&&(this.ownedDraft.contextId!==contextId||this.ownedDraft.text!==actualText))this.ownedDraft=null;
       if(this.ownedDraft)state.draftPresent=false;
@@ -185,7 +190,7 @@ export class CodexDesktop implements Desktop {
       const activeIds=await p.locator('[data-app-action-sidebar-thread-active="true"][aria-current="page"]').evaluateAll(es=>[...new Set(es.map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))]);
       const compatible=count===1&&activeIds.length<=1&&(!composerId||composerId===state.threadId);
       if(state.threadId){const merged=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,merged);state.messages=merged;}
-      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.3.1',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
+      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.0',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
     }catch(e){this.page=null;return emptySnapshot(e instanceof SafeError?e.message:'未连接桌面控制入口。请关闭 Codex 后，用配套启动器重新打开。');}
   }
   private async check(threadId:string){const s=await this.snapshot();if(!s.compatible)throw new SafeError('INCOMPATIBLE',s.error||'桌面版本不兼容。');if((s.contextId||s.threadId)!==threadId)throw new SafeError('CHAT_CHANGED','电脑已切换聊天，操作已取消。');return s;}
@@ -312,6 +317,7 @@ export class CodexDesktop implements Desktop {
     return{id:op.id,status:'unknown',message:'已点击发送，但尚未确认消息。请检查聊天，勿重复发送。'};
   }
   async image(id:string){return this.transfers.image(await this.connect(),id)}
+  async download(contextId:string,id:string){return this.generatedFiles.open(contextId,id)}
   async stage(contextId:string,name:string,data:Buffer){await this.check(contextId);return this.transfers.stage(contextId,name,data)}
   async files(folder:string|null){return this.transfers.files(folder)}
   async stageFile(contextId:string,id:string){await this.check(contextId);return this.transfers.stageFile(contextId,id)}

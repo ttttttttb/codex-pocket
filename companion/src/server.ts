@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {pipeline} from 'node:stream/promises';
 import QRCode from 'qrcode';
 import {WebSocketServer,WebSocket} from 'ws';
 import {Identity,certificate} from './identity.js';
@@ -67,9 +68,27 @@ export class Companion {
         const u=new URL(req.url||'/','https://localhost');
         if(req.method==='POST'&&u.pathname==='/api/pair'){
           const body=await jsonBody(req);if(typeof body.code!=='string')return json(res,400,{error:'BAD_PAIR'});
-          const token=this.identity.pair(body.code,req.socket.remoteAddress||'unknown');return json(res,200,{token,name:os.hostname(),version:'0.3.1'});
+          const token=this.identity.pair(body.code,req.socket.remoteAddress||'unknown');return json(res,200,{token,name:os.hostname(),version:'0.4.0'});
         }
         if(!this.identity.authenticate(bearer(req)))return json(res,401,{error:'UNAUTHORIZED'});
+        if(req.method==='GET'&&/^\/api\/downloads\/[0-9a-f-]{36}$/.test(u.pathname)&&this.desktop.download){
+          const context=u.searchParams.get('contextId')||'';
+          if(!context||context.length>300||[...u.searchParams.keys()].some(k=>k!=='contextId'))throw new SafeError('BAD_DOWNLOAD','文件参数无效。');
+          const {handle,file}=await this.desktop.download(context,u.pathname.split('/').at(-1)!);
+          try{
+            const before=await handle.stat();const hash=crypto.createHash('sha256');
+            if(file.size)for await(const chunk of handle.createReadStream({start:0,end:file.size-1,autoClose:false}))hash.update(chunk);
+            const after=await handle.stat();
+            if(before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw new SafeError('FILE_CHANGED','文件正在变化，请稍后刷新聊天重试。');
+            if(!this.identity.authenticate(bearer(req))){await handle.close();return json(res,401,{error:'UNAUTHORIZED'})}
+            res.writeHead(200,{'Content-Type':file.mime,'Content-Length':file.size!,'X-File-SHA256':hash.digest('hex'),'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(file.name),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+            if(!file.size){res.end();return}
+            const source=handle.createReadStream({start:0,end:file.size-1});
+            const revoke=setInterval(()=>{if(!this.identity.authenticate(bearer(req)))source.destroy(new Error('Authorization revoked'))},250);
+            try{await pipeline(source,res)}finally{clearInterval(revoke)}
+          }finally{await handle.close().catch(()=>{})}
+          return;
+        }
         if(req.method==='GET'&&/^\/api\/images\/[0-9a-f-]{36}$/.test(u.pathname)&&this.desktop.image){const bytes=await this.desktop.image(u.pathname.split('/').at(-1)!);res.writeHead(200,{'Content-Type':'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(bytes)}
         if(req.method==='POST'&&u.pathname==='/api/uploads'&&this.desktop.stage){
           const context=u.searchParams.get('contextId')||'',name=u.searchParams.get('name')||'文件';
@@ -83,7 +102,7 @@ export class Companion {
         if(req.method==='GET'&&u.pathname==='/api/snapshot')return json(res,200,this.latest);
         if(req.method==='GET'&&/^\/api\/operations\/[0-9a-f-]{36}$/.test(u.pathname))return json(res,200,this.journal.get(u.pathname.split('/').at(-1)!)||{status:'unknown',message:'电脑尚未确认此操作。'});
         return json(res,404,{error:'NOT_FOUND'});
-      }catch(e){const safe=e instanceof SafeError;json(res,safe?400:500,{error:safe?e.code:'REQUEST_FAILED',message:safe?e.message:'请求失败，请重试。'});}
+      }catch(e){if(res.headersSent){res.destroy();return}const safe=e instanceof SafeError;json(res,safe?400:500,{error:safe?e.code:'REQUEST_FAILED',message:safe?e.message:'请求失败，请重试。'});}
     });
     this.tls.requestTimeout=10000;this.tls.headersTimeout=10000;
     this.tls.on('upgrade',(req,socket,head)=>{
@@ -96,7 +115,7 @@ export class Companion {
   }
   async adminStatus(){
     const p=this.identity.pairing();const qr=this.tlsInfo&&!this.identity.paired()?JSON.stringify({v:1,name:os.hostname(),url:this.tlsInfo.url,fp:this.tlsInfo.fingerprint,code:p.code}):null;
-    return{network:this.tlsInfo,paired:this.identity.paired(),expiresAt:p.expiresAt,qr:qr?await QRCode.toDataURL(qr,{width:360,margin:2,errorCorrectionLevel:'M'}):null,pairingText:qr,desktop:{connected:this.latest.connected,compatible:this.latest.compatible,error:this.latest.error,title:this.latest.title,version:this.latest.desktopVersion},version:'0.3.1'};
+    return{network:this.tlsInfo,paired:this.identity.paired(),expiresAt:p.expiresAt,qr:qr?await QRCode.toDataURL(qr,{width:360,margin:2,errorCorrectionLevel:'M'}):null,pairingText:qr,desktop:{connected:this.latest.connected,compatible:this.latest.compatible,error:this.latest.error,title:this.latest.title,version:this.latest.desktopVersion},version:'0.4.0'};
   }
   private async poll(){if(this.polling)return;this.polling=true;try{const snapshot=await this.desktop.snapshot();const rev=crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');this.latest=snapshot;if(rev!==this.revision){this.revision=rev;this.seq++;this.broadcast({type:'snapshot',seq:this.seq,snapshot});}}catch{this.latest=emptySnapshot('桌面连接暂时中断。');this.broadcast({type:'snapshot',seq:++this.seq,snapshot:this.latest});}finally{this.polling=false}}
   private broadcast(v:unknown){const data=JSON.stringify(v);for(const ws of this.wss.clients)if(ws.readyState===WebSocket.OPEN){if(ws.bufferedAmount>4000000){ws.close(4003,'Slow client');continue;}ws.send(data)}}
