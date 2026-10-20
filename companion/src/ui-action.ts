@@ -1,14 +1,19 @@
 import type {Page} from 'playwright-core';
 
 // Serialized into the renderer: validate the visible chat immediately before a UI click.
-export function atomicClick(el:Element,expected:{contextId:string,emptyDraft?:boolean,confirmationSummary?:string,checkOnly?:boolean,clearDraft?:string}){
+export function atomicClick(el:Element,expected:{contextId:string,emptyDraft?:boolean,expectedDraft?:string,confirmationSummary?:string,surfaceId?:string,actionLabel?:string,checkOnly?:boolean,clearDraft?:string}){
   const route=location.pathname+' '+location.hash;
   const active=[...new Set(Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-active="true"][aria-current="page"]')).map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))];
   const id=document.querySelector('[data-current-thread]')?.getAttribute('data-current-thread')||route.match(/\/(?:local|threads|thread)\/([^/?#\s]+)/)?.[1]||document.querySelector('textarea[data-conversation-id]')?.getAttribute('data-conversation-id')||(active.length===1?active[0]:null)||document.documentElement.getAttribute('data-pocket-context-id');
   if(active.length>1||id!==expected.contextId||!el.isConnected||(el as HTMLButtonElement).disabled||el.getAttribute('aria-disabled')==='true')return false;
-  if(expected.emptyDraft){
-    const editors=Array.from(document.querySelectorAll<HTMLElement>('[data-codex-composer][contenteditable="true"], [data-codex-composer] [contenteditable="true"], [data-codex-composer-root] .tiptap[contenteditable="true"], [data-composer-markdown][contenteditable="true"], textarea[data-conversation-id]')).filter(e=>e.offsetWidth&&e.offsetHeight&&!e.closest("[data-codex-composer-request-navigation]"));
-    if(editors.length!==1||(editors[0] instanceof HTMLTextAreaElement?editors[0].value:editors[0].innerText).trim())return false;
+  if(!(el as HTMLElement).offsetWidth||!(el as HTMLElement).offsetHeight||el.closest('[inert],[aria-hidden="true"]'))return false;
+  const dialogs=Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"]')).filter(d=>d.offsetWidth&&d.offsetHeight&&!d.closest('[inert],[aria-hidden="true"]'));
+  const top=dialogs.at(-1);if(top&&!top.contains(el))return false;
+  if(expected.surfaceId&&!el.closest('[data-pocket-ui-id="'+expected.surfaceId+'"]'))return false;
+  if(expected.actionLabel!==undefined&&(el.getAttribute('aria-label')||(el as HTMLElement).innerText||el.getAttribute('title')||'').trim()!==expected.actionLabel)return false;
+  if(expected.emptyDraft||expected.expectedDraft!==undefined){
+    const editors=Array.from(document.querySelectorAll<HTMLElement>('[data-codex-composer][contenteditable="true"], [data-codex-composer] [contenteditable="true"], [data-codex-composer-root] .tiptap[contenteditable="true"], [data-composer-markdown][contenteditable="true"], textarea[data-conversation-id]')).filter(e=>e.offsetWidth&&e.offsetHeight&&!e.closest('[data-codex-composer-request-navigation],[data-app-shell-tab-panel-controller="right"]'));
+    if(editors.length!==1||(editors[0] instanceof HTMLTextAreaElement?editors[0].value:editors[0].innerText).trim()!==(expected.expectedDraft?.trim()||''))return false;
   }
   if(expected.confirmationSummary&&(el.closest<HTMLElement>('[role="dialog"],[role="alertdialog"]')?.innerText.trim()!==expected.confirmationSummary))return false;
   if(expected.checkOnly)return true;
@@ -28,9 +33,11 @@ export function atomicField(el:Element,expected:{contextId:string,oldValue:strin
   const route=location.pathname+' '+location.hash;
   const active=[...new Set(Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-active="true"][aria-current="page"]')).map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))];
   const id=document.querySelector('[data-current-thread]')?.getAttribute('data-current-thread')||route.match(/\/(?:local|threads|thread)\/([^/?#\s]+)/)?.[1]||document.querySelector('textarea[data-conversation-id]')?.getAttribute('data-conversation-id')||(active.length===1?active[0]:null)||document.documentElement.getAttribute('data-pocket-context-id');
-  if(active.length>1||id!==expected.contextId||!(el instanceof HTMLElement)||!el.isConnected||!el.offsetWidth||(el as HTMLInputElement).disabled)return false;
+  if(active.length>1||id!==expected.contextId||!(el instanceof HTMLElement)||!el.isConnected||!el.offsetWidth||!el.offsetHeight||(el as HTMLInputElement).disabled||el.getAttribute('aria-disabled')==='true'||el.closest('[inert],[aria-hidden="true"]'))return false;
+  const dialogs=Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"]')).filter(d=>d.offsetWidth&&d.offsetHeight&&!d.closest('[inert],[aria-hidden="true"]'));
+  const top=dialogs.at(-1);if(top&&!top.contains(el))return false;
   const editable=el.isContentEditable;
-  if((editable?el.innerText:(el as HTMLInputElement).value)!==expected.oldValue)return false;
+  if((editable?el.innerText.trimEnd():(el as HTMLInputElement).value)!==expected.oldValue)return false;
   if(editable){el.focus();const range=document.createRange();range.selectNodeContents(el);const selection=getSelection();selection?.removeAllRanges();selection?.addRange(range);return document.execCommand(expected.value?'insertText':'delete',false,expected.value);}
   const proto=el instanceof HTMLSelectElement?HTMLSelectElement.prototype:el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:el instanceof HTMLInputElement?HTMLInputElement.prototype:null;
   if(!proto||el instanceof HTMLSelectElement&&!Array.from(el.options).some(o=>o.value===expected.value&&!o.disabled))return false;

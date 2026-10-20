@@ -5,7 +5,7 @@ import {atomicClick,dismissFloatingMenus} from './ui-action.js';
 
 export function readControls(){
   const visible=(e:Element)=>!!(e as HTMLElement).offsetWidth&&!e.closest('[inert],[aria-hidden="true"]');
-  const root=document.querySelector('[data-codex-composer-root]')||document.querySelector('[data-composer-footer-responsive]')||document;
+  const root=Array.from(document.querySelectorAll('[data-codex-composer-root],[data-composer-footer-responsive]')).find(e=>!e.closest('[data-app-shell-tab-panel-controller="right"]'))||document;
   const buttons=Array.from(root.querySelectorAll<HTMLButtonElement>('button')).filter(e=>!!e.offsetWidth);
   const permission=root.querySelector<HTMLButtonElement>('[data-composer-navigation-target="permissions"]');
   const intelligence=root.querySelector<HTMLButtonElement>('[data-codex-intelligence-trigger],[data-composer-navigation-target="reasoning"]');
@@ -30,9 +30,10 @@ export function readControls(){
   while(ancestor&&!ancestor.matches('[data-app-action-sidebar-section]')){const rows=ancestor.querySelectorAll('[data-app-action-sidebar-project-row]');if(rows.length===1){currentProjectId=rows[0].getAttribute('data-app-action-sidebar-project-id');break;}ancestor=ancestor.parentElement;}
   const newChat=Array.from(document.querySelectorAll('button')).some(b=>visible(b)&&/^(?:新聊天|新建聊天|New chat)$/i.test(b.getAttribute('aria-label')||b.innerText.trim()));
   const dialogs=Array.from(document.querySelectorAll<HTMLElement>('[role="alertdialog"],[role="dialog"]')).filter(visible);
-  const dialog=dialogs.find(d=>/完[全整]访问|full access|不受限制|unrestricted/i.test(d.innerText)&&d.querySelector('button'));
+  const top=dialogs.at(-1);
+  const dialog=top&&/完[全整]访问|full access|不受限制|unrestricted/i.test(top.innerText)&&top.querySelector('button')?top:null;
   let confirmation:Confirmation|null=null;
-  if(dialog){const bs=Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).filter(visible);const a=bs.find(b=>/^(?:允许|确认|启用|继续|Allow|Confirm|Enable|Continue)(?:完全访问(?:权限)?| full access)?$/i.test(b.innerText.trim()));const d=bs.find(b=>/^(?:取消|拒绝|Cancel|Deny)$/i.test(b.innerText.trim()));if(a&&d)confirmation={id:'',summary:dialog.innerText.trim(),acceptLabel:a.innerText.trim(),declineLabel:d.innerText.trim()};}
+  if(dialog){const bs=Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).filter(visible);const a=bs.find(b=>/^(?:允许|确认|启用|继续|Allow|Confirm|Enable|Continue)(?:完[全整]访问(?:权限)?| full access)?$/i.test(b.innerText.trim()));const d=bs.find(b=>/^(?:取消|拒绝|Cancel|Deny)$/i.test(b.innerText.trim()));if(a&&d&&!a.disabled&&!d.disabled&&!dialog.querySelector('input,textarea,select,[contenteditable="true"],[role="checkbox"],[role="radio"]')){let surfaceId=dialog.getAttribute('data-pocket-ui-id');if(!surfaceId){surfaceId=crypto.randomUUID?.()||'10000000-1000-4000-8000-100000000000'.replace(/[018]/g,c=>(Number(c)^crypto.getRandomValues(new Uint8Array(1))[0]&15>>Number(c)/4).toString(16));dialog.setAttribute('data-pocket-ui-id',surfaceId)}confirmation={id:'',surfaceId,summary:dialog.innerText.trim(),acceptLabel:a.innerText.trim(),declineLabel:d.innerText.trim()};}}
   return{projects,currentProjectId,settings,confirmation,capabilities:{newChat,settings:settings.some(s=>s.enabled)}};
 }
 
@@ -42,13 +43,14 @@ export class DesktopControls{
   menu:SettingMenu|null=null;
   private targets=new Map<string,Target>();
   private expiry=0;
-  private trigger(key:SettingKey,p:Page){return p.locator(key==='permission'?'[data-composer-navigation-target="permissions"]':'[data-codex-intelligence-trigger],[data-composer-navigation-target="reasoning"]').filter({visible:true});}
+  private trigger(key:SettingKey,p:Page){return p.locator(key==='permission'?'[data-composer-navigation-target="permissions"]:not([data-app-shell-tab-panel-controller="right"] *)':'[data-codex-intelligence-trigger]:not([data-app-shell-tab-panel-controller="right"] *),[data-composer-navigation-target="reasoning"]:not([data-app-shell-tab-panel-controller="right"] *)').filter({visible:true});}
   private async closeMenu(_p:Page){this.menu=null;this.targets.clear();}
   private async open(p:Page,key:SettingKey){
     if(key==='plan')return;
     if(await p.locator('[role="dialog"],[role="alertdialog"],[role="menu"]').filter({visible:true}).count())throw new SafeError('DESKTOP_MENU','电脑有已打开的菜单或对话框，请先处理。');
     const trigger=this.trigger(key,p);if(await trigger.count()!==1||!await trigger.isEnabled())throw new SafeError('NO_CONTROL','桌面没有提供这个控件。');
-    await trigger.press('Enter');
+    if(!await trigger.evaluate(atomicClick,{contextId:await p.locator('html').getAttribute('data-pocket-active-context')||'',checkOnly:true}))throw new SafeError('DIALOG_OPEN','页面或弹窗已变化，未打开设置。');
+    await trigger.press('Enter',{timeout:1200});
     if(key==='model'){
       const toggle=p.locator('[data-model-picker-view-toggle]').filter({visible:true});
       if(await toggle.count()===1)await toggle.evaluate(e=>(e as HTMLElement).click());
@@ -100,7 +102,12 @@ export class DesktopControls{
         const slider=p.locator('[data-reasoning-slider],[data-model-picker-power-slider] [role="slider"]').filter({visible:true}).first();
         await slider.focus();
         const now=Number(await p.locator('[data-model-picker-power-slider] [role="slider"],[data-reasoning-slider] [role="slider"]').first().getAttribute('aria-valuenow'));
-        for(let n=0;n<Math.abs(target.value!-now);n++){await check();await slider.press(target.value!>now?'ArrowRight':'ArrowLeft');}
+        for(let n=0;n<Math.abs(target.value!-now);n++){
+          const fresh=await check();if(fresh.confirmation||fresh.surfaces?.some(x=>x.kind==='dialog'))return '桌面要求确认，请先处理手机上的弹窗。';
+          if(!await slider.evaluate(atomicClick,{contextId:state.contextId!,checkOnly:true}))throw new SafeError('DIALOG_OPEN','控件或弹窗已变化，已暂停强度调整。');
+          await slider.press(target.value!>now?'ArrowRight':'ArrowLeft',{timeout:1200});
+        }
+        const after=await check();if(after.confirmation||after.surfaces?.some(x=>x.kind==='dialog'))return '桌面要求确认，请先处理手机上的弹窗。';
         const actual=Number(await p.locator('[data-model-picker-power-slider] [role="slider"],[data-reasoning-slider] [role="slider"]').first().getAttribute('aria-valuenow'));
         if(actual!==target.value)throw new SafeError('NOT_CONFIRMED','桌面未确认强度修改，请检查当前设置。');
       }else{
@@ -110,13 +117,17 @@ export class DesktopControls{
         if(matches!==1||!match)throw new SafeError('OPTIONS_CHANGED','无法唯一定位选项，请重新读取。');if(!await match.evaluate(atomicClick,{contextId:state.contextId!}))throw new SafeError('CHAT_CHANGED','聊天已变化，未执行。');
       }
     }finally{await this.dismiss(p);this.menu=null;this.targets.clear();}
-    for(let n=0;n<12;n++){await p.waitForTimeout(120);const fresh=await check();if(fresh.confirmation)return '桌面要求确认，请查看并确认。';if(fresh.settingsRevision!==state.settingsRevision)return '桌面已确认设置更新。';}
+    for(let n=0;n<12;n++){await p.waitForTimeout(120);const fresh=await check();if(fresh.confirmation||fresh.surfaces?.some(x=>x.kind==='dialog'))return '桌面要求确认，请查看并确认或取消。';if(fresh.settingsRevision!==state.settingsRevision)return '桌面已确认设置更新。';}
     throw new SafeError('NOT_CONFIRMED','桌面尚未确认修改，请检查当前设置。');
   }
   async confirm(p:Page,state:Snapshot,id:string,accept:boolean){
     const c=state.confirmation;if(!c||c.id!==id)throw new SafeError('STALE_CONFIRMATION','确认请求已变化。');
     const dialogs=p.locator('[role="dialog"],[role="alertdialog"]').filter({visible:true});
-    for(let i=0;i<await dialogs.count();i++){const d=dialogs.nth(i);if((await d.innerText()).trim()!==c.summary)continue;const b=d.getByRole('button',{name:accept?c.acceptLabel:c.declineLabel,exact:true});if(await b.count()===1&&await b.evaluate(atomicClick,{contextId:state.contextId!,confirmationSummary:c.summary}))return '已处理桌面确认。';}
+    for(let i=0;i<await dialogs.count();i++){const d=dialogs.nth(i);if(c.surfaceId&&await d.getAttribute('data-pocket-ui-id')!==c.surfaceId||(await d.innerText()).trim()!==c.summary)continue;const b=d.getByRole('button',{name:accept?c.acceptLabel:c.declineLabel,exact:true});if(await b.count()===1&&await b.evaluate(atomicClick,{contextId:state.contextId!,surfaceId:c.surfaceId,confirmationSummary:c.summary,actionLabel:accept?c.acceptLabel:c.declineLabel})){
+      const original=c.surfaceId?p.locator('[data-pocket-ui-id="'+c.surfaceId+'"]'):d;
+      for(let n=0;n<10;n++){if(!await original.count()||!await original.isVisible())return accept?'已确认桌面请求。':'已取消桌面请求。';await p.waitForTimeout(80)}
+      throw new SafeError('NOT_CONFIRMED','已点击桌面按钮，但弹窗结果尚未确认；请检查当前提示，勿重复操作。');
+    }}
     throw new SafeError('STALE_CONFIRMATION','找不到原确认请求，未操作。');
   }
   private async dismiss(p:Page){

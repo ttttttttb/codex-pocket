@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id(
 android {
     namespace = "cn.codexpocket.app"
     compileSdk = 35
-    defaultConfig { applicationId = "cn.codexpocket.app"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "0.4.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "cn.codexpocket.app"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.4.1"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     signingConfigs { create("personal") { storeFile = rootProject.file("keystore/development.jks"); storePassword = "android"; keyAlias = "codexpocket"; keyPassword = "android" } }
     buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("personal") }; getByName("release") { isMinifyEnabled = false; signingConfig = signingConfigs.getByName("personal") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

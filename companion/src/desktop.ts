@@ -12,14 +12,14 @@ import {Transfers} from './transfers.js';
 import {GeneratedFiles,type ObservedFileLink} from './generated-files.js';
 import {emptySnapshot,SafeError,type Desktop,type Snapshot,type Operation,type OperationResult,type Message} from './types.js';
 
-const QUESTION_EXCLUSION=':not([data-codex-composer-request-navigation] *)';
+const QUESTION_EXCLUSION=':not([data-codex-composer-request-navigation] *):not([class~="@container/request-card"] *):not(form[data-codex-character-input-boundary][data-codex-escape-boundary] *):not([data-app-shell-tab-panel-controller="right"] *)';
 export const COMPOSER='[data-codex-composer][contenteditable="true"], [data-codex-composer] [contenteditable="true"], [data-codex-composer-root] .tiptap[contenteditable="true"], [data-composer-markdown][contenteditable="true"], textarea[data-conversation-id]'.split(', ').map(s=>s+QUESTION_EXCLUSION).join(', ');
 const SEND=/^(?:Queue|排队|Send|Send message|Send prompt|Submit|Submit prompt|Steer|Steer prompt|发送|发送消息|发送提示|提交|提交提示|引导|立即发送)(?:\s*\([^)]*\))?$/i;
 const STOP=/^(?:Stop|Stop task|Stop response|Stop generating|Interrupt|停止|停止任务|停止生成|停止响应|中断)(?:\s*\([^)]*\))?$/i;
 
 // These functions are serialized by Playwright; keep them independent of module scope.
 export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'version'>&{fileLinks:ObservedFileLink[]}{
-  const visible=(e:Element)=>!!(e as HTMLElement).offsetWidth&&!!(e as HTMLElement).offsetHeight;
+  const visible=(e:Element)=>!!(e as HTMLElement).offsetWidth&&!!(e as HTMLElement).offsetHeight&&!e.closest('[data-app-shell-tab-panel-controller="right"]');
   const tidy=(s:string)=>(s||'').replace(/\u00a0/g,' ').trim();
   const uuid=()=>crypto.randomUUID?.()||'10000000-1000-4000-8000-100000000000'.replace(/[018]/g,c=>(Number(c)^crypto.getRandomValues(new Uint8Array(1))[0]&15>>Number(c)/4).toString(16));
   const usedImages=new Set<string>();
@@ -51,7 +51,10 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
   const chats=[...sidebarChats,...Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).flatMap(a=>{const id=a.getAttribute('href')?.match(/\/(?:local|threads|thread)\/([^/?#]+)/)?.[1];return id&&tidy(a.innerText)?[{id,title:tidy(a.innerText).slice(0,150),active:id===threadId}]:[]})].filter((c,i,a)=>a.findIndex(x=>x.id===c.id)===i);
   const messages:Message[]=[];
   const fileLinks:ObservedFileLink[]=[];
-  const candidates=Array.from(document.querySelectorAll<HTMLElement>('[data-turn-key] [data-user-message-bubble], [data-turn-key] .markdown, [data-turn-key] .prose, [data-turn-key] [data-markdown-text-style="assistant-message"], [data-message-role], [data-content-search-unit-key] article'));
+  // Attachments are siblings of the text bubble. A turn can contain several
+  // user messages (steering/replies), so the whole turn is not their owner.
+  const userRoots=Array.from(document.querySelectorAll<HTMLElement>('[data-content-search-unit-key]')).filter(e=>!!e.querySelector('[data-user-message-bubble],[aria-label="用户附件"],[aria-label="User attachment"],img[alt="用户附件"],img[alt="User attachment"],[data-composer-attachment-pill]')||e.hasAttribute('data-local-conversation-user-anchor'));
+  const candidates=[...new Set([...userRoots,...Array.from(document.querySelectorAll<HTMLElement>('[data-turn-key] [data-user-message-bubble], [data-turn-key] .markdown, [data-turn-key] .prose, [data-turn-key] [data-markdown-text-style="assistant-message"], [data-message-role], [data-content-search-unit-key] article'))])].filter(e=>!userRoots.some(u=>u!==e&&u.contains(e))).sort((a,b)=>a===b?0:a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1);
   const slots=new Map<string,number>();
   for(const el of candidates){
     if(!visible(el)||el.closest('[aria-hidden="true"],[inert]'))continue;
@@ -63,25 +66,29 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
     if(el.matches('.prose')&&el.closest('.markdown')!==null)continue;
     if(el.matches('.markdown,.prose')&&el.closest('[data-user-message-bubble]'))continue;
     const unit=el.closest('[data-content-search-unit-key]');const turn=el.closest('[data-turn-key]');
-    const role=el.matches('[data-user-message-bubble]')||el.getAttribute('data-message-role')==='user'?'user':el.getAttribute('data-message-role')==='activity'?'activity':'assistant';
-    const turnId=turn?.getAttribute('data-turn-key')||undefined,unitId=unit?.getAttribute('data-content-search-unit-key')||undefined;
+    const role=userRoots.includes(el)||el.matches('[data-user-message-bubble]')||el.getAttribute('data-message-role')==='user'?'user':el.getAttribute('data-message-role')==='activity'?'activity':'assistant';
+    const turnId=el.closest('[data-content-search-turn-key]')?.getAttribute('data-content-search-turn-key')||turn?.getAttribute('data-turn-key')||undefined,unitId=unit?.getAttribute('data-content-search-unit-key')||undefined;
     const key=turnId||el.getAttribute('data-message-id')||unitId||'visible';
-    let markdown=tidy(md(el)).replace(/\n{3,}/g,'\n\n');const images=imageRefs(el);images.forEach(i=>usedImages.add(i.id));if(!markdown&&!images.length)continue;
+    const textRoot=role==='user'&&userRoots.includes(el)?el.querySelector('[data-user-message-bubble]'):el;
+    let markdown=textRoot?tidy(md(textRoot)).replace(/\n{3,}/g,'\n\n'):'';
+    const images=imageRefs(el);images.forEach(i=>usedImages.add(i.id));
+    const attachedFiles=role==='user'?Array.from(el.querySelectorAll<HTMLElement>('[data-composer-attachment-pill]')).map((f,i)=>({id:key+':file:'+i,name:tidy(f.getAttribute('aria-label')||f.textContent||'附件')})).filter(f=>!!f.name):[];
+    if(!markdown&&!images.length&&!attachedFiles.length)continue;
     const slotKey=key+':'+role,slot=slots.get(slotKey)||0;slots.set(slotKey,slot+1);
     const id=slotKey+':'+slot;
-    messages.push({id,role,markdown,turnId,unitId,slot,images});
+    messages.push({id,role,markdown,turnId,unitId,slot,images,attachedFiles:attachedFiles.map((f,i)=>({...f,id:id+':file:'+i}))});
     if(role==='assistant')for(const a of el.querySelectorAll('a[href],[data-file-reference][data-markdown-copy-text]'))fileLinks.push({messageId:id,href:a.getAttribute('href')||a.getAttribute('data-markdown-copy-text')||'',label:tidy(a.textContent||'')});
   }
   for(const turn of document.querySelectorAll<HTMLElement>("[data-turn-key]")){
-    if(turn.querySelector("[data-turn-key]"))continue;
+    if(!visible(turn)||turn.querySelector("[data-turn-key]"))continue;
     const images=imageRefs(turn).filter(i=>!usedImages.has(i.id));if(!images.length)continue;
-    images.forEach(i=>usedImages.add(i.id));const turnId=turn.getAttribute("data-turn-key")!;
-    const role=turn.querySelector("[data-user-message-bubble]")?"user":"assistant";
+    images.forEach(i=>usedImages.add(i.id));const turnId=turn.querySelector('[data-content-search-turn-key]')?.getAttribute('data-content-search-turn-key')||turn.getAttribute("data-turn-key")!;
+    const role=turn.querySelector('[data-user-message-bubble],[aria-label="用户附件"],[aria-label="User attachment"],img[alt="用户附件"],img[alt="User attachment"]')?"user":"assistant";
     const existing=messages.find(m=>m.turnId===turnId&&m.role===role);
     if(existing)existing.images=[...(existing.images||[]),...images];else messages.push({id:turnId+":"+role+":0",role,markdown:"",turnId,images});
   }
   if(!messages.length)for(const el of document.querySelectorAll<HTMLElement>('[data-turn-key]')){
-    if(el.querySelector('[data-turn-key]'))continue;const markdown=tidy(md(el)).replace(/\n{3,}/g,'\n\n');if(markdown)messages.push({id:el.dataset.turnKey||'visible',role:'activity',markdown});
+    if(!visible(el)||el.querySelector('[data-turn-key]'))continue;const markdown=tidy(md(el)).replace(/\n{3,}/g,'\n\n');if(markdown)messages.push({id:el.dataset.turnKey||'visible',role:'activity',markdown});
   }
   const fingerprint=(s:string)=>{let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return(h>>>0).toString(16)};
   const approvals=Array.from(document.querySelectorAll<HTMLElement>('[data-codex-composer-request-navigation]')).filter(visible).flatMap(root=>{
@@ -146,7 +153,9 @@ export class CodexDesktop implements Desktop {
     const pages=this.browser.contexts().flatMap(c=>c.pages());
     this.page=null;
     const candidates:Page[]=[];
-    for(const p of pages){if(p.isClosed())continue;const u=p.url();if(!this.fixture&&!/^(?:app|codex|file):\/\//.test(u))continue;if(await p.locator(COMPOSER).filter({visible:true}).count())candidates.push(p);}
+    for(const p of pages){if(p.isClosed())continue;const u=p.url();if(!this.fixture&&!/^(?:app|codex|file):\/\//.test(u))continue;
+      if(await p.locator(COMPOSER+', [data-current-thread],[data-app-action-sidebar-thread-active="true"][aria-current="page"],[data-codex-composer-request-navigation],[data-codex-question],[class~="@container/request-card"]').filter({visible:true}).count())candidates.push(p);
+    }
     if(candidates.length>1)throw new SafeError('MULTIPLE_WINDOWS','检测到多个 Codex 聊天窗口，请先保留一个窗口以免操作错误。');
     this.page=candidates[0]||null;
     if(!this.page)throw new SafeError('NO_CODEX','找不到 Codex 聊天输入框。请在桌面打开一段本地聊天。');
@@ -161,6 +170,23 @@ export class CodexDesktop implements Desktop {
         if(await other.locator(COMPOSER).filter({visible:true}).count())throw new SafeError('MULTIPLE_WINDOWS','检测到多个 Codex 聊天窗口，请先保留一个窗口以免操作错误。');
       }
       const {fileLinks,...state}=await p.evaluate(domSnapshot);
+      const editorCount=await p.locator(COMPOSER).filter({visible:true}).count();
+      if(editorCount!==1){
+        // Preview/browser layout transitions can temporarily hide or remount the
+        // main editor. Keep the CDP page and readable state so the next poll can
+        // recover, rather than timing out and throwing away the conversation.
+        const ui=await p.evaluate(readControls),remote=await this.remoteUi.read(p);
+        if(state.threadId){state.messages=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,state.messages);this.newContext=null;await p.evaluate(()=>document.documentElement.removeAttribute('data-pocket-context-id'));}
+        const active=await p.locator('[data-app-action-sidebar-thread-active="true"][aria-current="page"]').evaluateAll(es=>[...new Set(es.map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))]);
+        const newOwner=await p.evaluate(()=>document.documentElement.getAttribute('data-pocket-context-id'));
+        const contextId=state.threadId||(newOwner===this.newContext?newOwner:null)||undefined;
+        const canRespond=editorCount===0&&!!contextId&&active.length<=1&&(remote.surfaces.some(x=>x.kind==='dialog'||x.kind==='question')||state.approvals.length>0);
+        state.approvals=state.approvals.map(a=>({...a,id:crypto.createHash('sha256').update(a.summary).digest('hex')}));
+        if(ui.confirmation)ui.confirmation.id=crypto.createHash('sha256').update(JSON.stringify({contextId,surfaceId:ui.confirmation.surfaceId,summary:ui.confirmation.summary})).digest('hex');
+        if(contextId)await this.generatedFiles.observe(contextId,state.messages,fileLinks);
+        await this.registerImages(p);
+        return {...state,...ui,...remote,connected:true,compatible:canRespond,contextId,screen:state.threadId?'chat':'new',version:'0.4.1',protocolVersion:3,desktopVersion,menu:null,sendEnabled:false,settings:ui.settings.map(s=>({...s,enabled:false,reason:'请先处理当前问答或等待主输入框恢复'})),capabilities:{newChat:false,settings:false},error:canRespond?null:editorCount===0?'电脑主聊天输入框暂不可见，连接仍在。可先处理问答或收起右侧预览；界面恢复后会自动同步。':'电脑出现多个主聊天输入框，已暂停发送以免误操作；请保留一个主聊天，恢复后自动同步。'};
+      }
       if(!state.threadId){
         this.newContext=await p.locator(COMPOSER).filter({visible:true}).first().evaluate((e,candidate)=>{
           const owner=e.getAttribute('data-pocket-context-owner');
@@ -168,6 +194,7 @@ export class CodexDesktop implements Desktop {
           e.setAttribute('data-pocket-context-owner',id);document.documentElement.setAttribute('data-pocket-context-id',id);return id;
         },'new:'+crypto.randomUUID());
       }else{
+        this.newContext=null;
         await p.locator(COMPOSER).filter({visible:true}).first().evaluate(e=>{e.removeAttribute('data-pocket-context-owner');document.documentElement.removeAttribute('data-pocket-context-id')});
       }
       this.lastContext=state.threadId;
@@ -179,9 +206,9 @@ export class CodexDesktop implements Desktop {
       await p.evaluate(id=>document.documentElement.setAttribute("data-pocket-active-context",id),contextId);
       const ui=await p.evaluate(readControls);
       const remote=await this.remoteUi.read(p);
-      this.transfers.registerImages(await p.locator("img[data-pocket-image-id]").evaluateAll((es,known)=>es.filter(e=>!known.includes(e.getAttribute("data-pocket-image-id")!)).map(e=>({id:e.getAttribute("data-pocket-image-id")!,src:(e as HTMLImageElement).currentSrc||(e as HTMLImageElement).src})),this.transfers.knownImages()));
+      await this.registerImages(p);
       if(!state.threadId&&!ui.currentProjectId)ui.currentProjectId=this.newProjectId;
-      if(ui.confirmation)ui.confirmation.id=crypto.createHash('sha256').update(ui.confirmation.summary).digest('hex');
+      if(ui.confirmation)ui.confirmation.id=crypto.createHash('sha256').update(JSON.stringify({contextId,surfaceId:ui.confirmation.surfaceId,summary:ui.confirmation.summary})).digest('hex');
       const settingsRevision=crypto.createHash('sha256').update(JSON.stringify({contextId,projectId:ui.currentProjectId,settings:ui.settings})).digest('hex');
       const menu=this.controls.menu?.contextId===contextId&&this.controls.menu.revision===settingsRevision?this.controls.menu:null;
       state.approvals=state.approvals.map(a=>({...a,id:crypto.createHash('sha256').update(a.summary).digest('hex')}));
@@ -190,13 +217,19 @@ export class CodexDesktop implements Desktop {
       const activeIds=await p.locator('[data-app-action-sidebar-thread-active="true"][aria-current="page"]').evaluateAll(es=>[...new Set(es.map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))]);
       const compatible=count===1&&activeIds.length<=1&&(!composerId||composerId===state.threadId);
       if(state.threadId){const merged=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,merged);state.messages=merged;}
-      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.0',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
+      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.1',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
     }catch(e){this.page=null;return emptySnapshot(e instanceof SafeError?e.message:'未连接桌面控制入口。请关闭 Codex 后，用配套启动器重新打开。');}
   }
+  private async registerImages(p:Page){this.transfers.registerImages(await p.locator('img[data-pocket-image-id]').evaluateAll((es,known)=>es.filter(e=>!known.includes(e.getAttribute('data-pocket-image-id')!)).map(e=>({id:e.getAttribute('data-pocket-image-id')!,src:(e as HTMLImageElement).currentSrc||(e as HTMLImageElement).src})),this.transfers.knownImages()));}
   private async check(threadId:string){const s=await this.snapshot();if(!s.compatible)throw new SafeError('INCOMPATIBLE',s.error||'桌面版本不兼容。');if((s.contextId||s.threadId)!==threadId)throw new SafeError('CHAT_CHANGED','电脑已切换聊天，操作已取消。');return s;}
   async operate(op:Operation):Promise<OperationResult>{
     const sent=(message:string):OperationResult=>({id:op.id,status:'sent',message});
     const p=await this.connect();
+    // A modal takes precedence over all underlying chat/settings operations.
+    const guard=await this.snapshot();
+    const modal=guard.surfaces?.filter(x=>x.kind==='dialog').at(-1);
+    if((guard.confirmation||modal)&&op.type!=='confirm'&&op.type!=='ui-action'&&op.type!=='ui-input')throw new SafeError('DIALOG_OPEN','请先确认或取消手机上显示的桌面弹窗，未操作底层聊天。');
+    if(!['confirm','ui-action','ui-input','approve','history','ui-close'].includes(op.type)&&await p.locator(COMPOSER).filter({visible:true}).count()!==1)throw new SafeError('WAITING_FOR_INPUT','电脑正在显示问答或预览，请先处理当前问答；主聊天输入框恢复后即可发送。');
     if(op.type==="ui-open"||op.type==="ui-close"||op.type==="ui-action"||op.type==="ui-input"||op.type==="context-clear"||op.type==="attach"||op.type==="attachment-remove"){
       const s=await this.check(op.threadId);
       if(op.type==="ui-open")return sent(await this.remoteUi.open(p,op.menu,s));
@@ -209,7 +242,7 @@ export class CodexDesktop implements Desktop {
         const clipboard=async()=>{try{return(await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-Command','Get-Clipboard -Raw'],{windowsHide:true,timeout:3000,maxBuffer:2*1024*1024})).stdout.trimEnd()}catch{return null}};
         const previous=copying?await clipboard():null;
         const message=await this.remoteUi.act(p,s,op);
-        if(!s.draftPresent){const text=await p.locator(COMPOSER).filter({visible:true}).first().evaluate(e=>(e instanceof HTMLTextAreaElement?e.value:(e as HTMLElement).innerText).trim());if(text)this.ownedDraft={contextId:op.threadId,text,editable:/^编辑消息|^Edit message/i.test(action?.label||'')||this.ownedDraft?.editable===true};}
+        if(!s.draftPresent&&await p.locator(COMPOSER).filter({visible:true}).count()===1){const text=await p.locator(COMPOSER).filter({visible:true}).first().evaluate(e=>(e instanceof HTMLTextAreaElement?e.value:(e as HTMLElement).innerText).trim());if(text)this.ownedDraft={contextId:op.threadId,text,editable:/^编辑消息|^Edit message/i.test(action?.label||'')||this.ownedDraft?.editable===true};}
         if(copying){await p.waitForTimeout(150);const text=await clipboard();if(text!=null&&text!==previous&&text.length<1000000)return {...sent('已复制到手机剪贴板。'),clipboard:text};return{id:op.id,status:'unknown',message:'已点击桌面复制，但未确认剪贴板变化，请检查，勿重复操作。'};}
         return sent(message);
       }
@@ -226,7 +259,7 @@ export class CodexDesktop implements Desktop {
       const state=await this.check(op.threadId);
       if(op.type==='confirm')return sent(await this.controls.confirm(p,state,op.confirmationId,op.decision==='accept'));
       if(op.expectedRevision!==state.settingsRevision)throw new SafeError('SETTINGS_CHANGED','电脑页面或设置已变化，请重试。');
-      if(state.confirmation)throw new SafeError('CONFIRMATION','请先处理桌面确认。');
+      if(state.confirmation||state.surfaces?.some(x=>x.kind==='dialog'))throw new SafeError('CONFIRMATION','请先处理桌面确认。');
       if(op.type==='options')return sent(await this.controls.options(p,op.setting,state));
       if(op.type==='setting')return sent(await this.controls.apply(p,op.setting,op.optionId,state,()=>this.check(op.threadId)));
       if(state.draftPresent||this.ownedDraft)throw new SafeError('DRAFT','电脑有未发送草稿或已选上下文，请先处理。');
@@ -260,7 +293,7 @@ export class CodexDesktop implements Desktop {
       return sent('已切换聊天。');
     }
     const before=await this.check(op.threadId);
-    if(before.confirmation&&op.type!=='stop')throw new SafeError('CONFIRMATION','请先处理桌面确认。');
+    if(before.confirmation||before.surfaces?.some(x=>x.kind==='dialog'))throw new SafeError('CONFIRMATION','请先处理桌面确认。');
     const composer=p.locator(COMPOSER).filter({visible:true});
     if(op.type==='history'){
       await p.evaluate(()=>{const turn=document.querySelector('[data-turn-key]');if(!turn)throw Error('没有可加载的历史');let el=turn.parentElement;while(el){if(el.scrollHeight>el.clientHeight+20&&/(auto|scroll)/.test(getComputedStyle(el).overflowY)){el.scrollTop=Math.max(0,el.scrollTop-el.clientHeight*0.8);return;}el=el.parentElement;}throw Error('找不到聊天滚动容器');});
@@ -291,7 +324,7 @@ export class CodexDesktop implements Desktop {
     const oldCount=before.messages.filter(m=>m.role==='user'&&m.markdown.trim()===desiredText.trim()).length;
     const inserted=await composer.evaluate((el,{text,threadId,prefix})=>{
       const route=location.pathname+' '+location.hash;const id=document.querySelector('[data-current-thread]')?.getAttribute('data-current-thread')||route.match(/\/(?:local|threads|thread)\/([^/?#\s]+)/)?.[1]||document.querySelector('textarea[data-conversation-id]')?.getAttribute('data-conversation-id')||(()=>{const ids=[...new Set(Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-row][data-app-action-sidebar-thread-active="true"][aria-current="page"]')).map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))];return ids.length===1?ids[0]:null})()||document.documentElement.getAttribute('data-pocket-context-id');
-      if(id!==threadId||(el instanceof HTMLTextAreaElement?el.value:(el as HTMLElement).innerText).trim()!==prefix)return false;
+      if(id!==threadId||(el instanceof HTMLTextAreaElement?el.value:(el as HTMLElement).innerText).trim()!==prefix||el.closest('[inert],[aria-hidden="true"]')||Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"]')).some(d=>d.offsetWidth&&d.offsetHeight&&!d.closest('[inert],[aria-hidden="true"]')&&!d.contains(el)))return false;
       (el as HTMLElement).focus();
       if(prefix&&!(el instanceof HTMLTextAreaElement)){const range=document.createRange();range.selectNodeContents(el);range.collapse(false);const selection=window.getSelection();selection?.removeAllRanges();selection?.addRange(range)}
       return !text||document.execCommand('insertText',false,(prefix?'\n':'')+text);
@@ -306,12 +339,7 @@ export class CodexDesktop implements Desktop {
     const send=(await root.count()?root:await footer.count()===1?footer:p).getByRole('button',{name:SEND}).filter({visible:true});
     if(await send.count()!==1)throw new SafeError('NO_SEND','无法唯一定位发送按钮，文本已保留在电脑草稿中。');
     // Atomic validation immediately before the UI action. Never call backend thread/start.
-    const clicked=await send.evaluate((el,{threadId,text})=>{
-      const route=location.pathname+' '+location.hash;const id=document.querySelector('[data-current-thread]')?.getAttribute('data-current-thread')||route.match(/\/(?:local|threads|thread)\/([^/?#\s]+)/)?.[1]||document.querySelector('textarea[data-conversation-id]')?.getAttribute('data-conversation-id')||(()=>{const ids=[...new Set(Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-row][data-app-action-sidebar-thread-active="true"][aria-current="page"]')).map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))];return ids.length===1?ids[0]:null})()||document.documentElement.getAttribute('data-pocket-context-id');
-      const editors=Array.from(document.querySelectorAll<HTMLElement>('[data-codex-composer][contenteditable="true"], [data-codex-composer] [contenteditable="true"], [data-codex-composer-root] .tiptap[contenteditable="true"], [data-composer-markdown][contenteditable="true"], textarea[data-conversation-id]')).filter(e=>e.offsetWidth&&e.offsetHeight&&!e.closest("[data-codex-composer-request-navigation]"));
-      if(id!==threadId||editors.length!==1||(editors[0] instanceof HTMLTextAreaElement?editors[0].value:editors[0].innerText).trim()!==text.trim()||(el as HTMLButtonElement).disabled)return false;
-      (el as HTMLButtonElement).click();return true;
-    },{...op,text:desiredText});
+    const clicked=await send.evaluate(atomicClick,{contextId:op.threadId,expectedDraft:desiredText});
     if(!clicked)throw new SafeError('CHANGED','聊天或草稿发生变化，未发送。');
     for(let i=0;i<15;i++){await p.waitForTimeout(200);const now=await this.snapshot();if(now.contextId!==op.threadId&&!op.threadId.startsWith('new:'))break;if(!now.draftPresent&&now.queue?.some(q=>!oldQueue.includes(q.id)))return sent('已进入桌面待处理队列，可在消息条点击引导。');if(!now.draftPresent&&now.messages.filter(m=>m.role==='user'&&m.markdown.trim()===desiredText.trim()).length>oldCount)return sent('已发送到桌面当前聊天。');}
     return{id:op.id,status:'unknown',message:'已点击发送，但尚未确认消息。请检查聊天，勿重复发送。'};

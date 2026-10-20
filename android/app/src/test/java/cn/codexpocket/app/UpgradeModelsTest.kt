@@ -5,6 +5,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UpgradeModelsTest {
+    @Test fun topDialogSuppressesOldConfirmationAndRetainsSafeDismissWhileSendIsUncertain(){
+        val s=Snapshot.parse(JSONObject("""{"connected":true,"compatible":true,"contextId":"created","confirmation":{"id":"old","surfaceId":"lower","summary":"完全访问","acceptLabel":"确认","declineLabel":"取消"},"surfaces":[{"id":"lower","revision":"r1","kind":"dialog","title":"权限","actions":[]},{"id":"top","revision":"r2","kind":"dialog","title":"Ultra 确认","dismissActionId":"cancel","actions":[{"id":"cancel","label":"取消","disabled":false}]}]}"""))
+        assertEquals("top",s.modalId);assertNull(s.activeConfirmation);assertEquals("cancel",s.activeDialog!!.dismissAction!!.id)
+        val state=UiState(snapshot=s,pendingId="send-unknown",pendingUnknown=true)
+        assertNull(state.remoteMenu);assertEquals("send-unknown",state.pendingId)
+        assertNull(s.activeDialog!!.copy(actions=s.activeDialog!!.actions.map{it.copy(disabled=true)}).dismissAction)
+    }
+    @Test fun questionWithoutComposerAndSiblingSentAttachmentsRemainVisible(){
+        val s=Snapshot.parse(JSONObject("""{"connected":true,"compatible":true,"contextId":"created","sendEnabled":false,"surfaces":[{"id":"q","revision":"r","kind":"question","title":"第二题","actions":[{"id":"a","label":"选项","description":"选项说明"}],"fields":[{"id":"f","label":"或自行撰写回复","value":"","type":"textarea"}]}],"messages":[{"id":"u","role":"user","markdown":"","images":[{"id":"im","alt":"用户附件"}],"attachedFiles":[{"id":"file","name":"报告.pdf"}]}]}"""))
+        assertTrue(s.compatible);assertFalse(s.sendEnabled);assertEquals("created",s.contextId)
+        assertEquals("选项说明",s.surfaces.single().actions.single().description);assertEquals("textarea",s.surfaces.single().fields.single().type)
+        assertEquals("报告.pdf",s.messages.single().attachedFiles.single().name);assertEquals("im",s.messages.single().images.single().id)
+    }
     @Test fun menuClosesLocallyWhileOfflineOrWaitingWithoutClearingAnUncertainSend(){
         val menu=RemoteSurface("plus","r","menu","添加内容",emptyList(),emptyList())
         for(connected in listOf(true,false)){

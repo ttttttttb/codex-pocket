@@ -9,7 +9,7 @@ const npm=path.join(path.dirname(process.execPath),'node_modules/npm/bin/npm-cli
 const modules=cp.execFileSync(process.execPath,[npm,'ls','--omit=dev','--all','--parseable'],{cwd:root,encoding:'utf8'}).trim().split(/\r?\n/).slice(1);
 const selected=[];
 for(const dir of modules.sort((a,b)=>a.length-b.length)){if(selected.some(parent=>dir.startsWith(parent+path.sep)))continue;selected.push(dir);copy(dir,path.join(stage,path.relative(root,dir)));}
-fs.writeFileSync(path.join(stage,'package.json'),JSON.stringify({name:'codex-pocket-companion',version:'0.4.0',private:true,type:'module'}));
+fs.writeFileSync(path.join(stage,'package.json'),JSON.stringify({name:'codex-pocket-companion',version:JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version,private:true,type:'module'}));
 copy(path.join(root,'README.md'),path.join(stage,'使用说明.md'));
 copy(path.join(root,'验证记录.md'),path.join(stage,'验证记录.md'));
 if(fs.existsSync(path.join(root,'NODE-RUNTIME-LICENSE.txt')))copy(path.join(root,'NODE-RUNTIME-LICENSE.txt'),path.join(stage,'runtime','LICENSE.txt'));

@@ -27,24 +27,29 @@ data class Session(val name: String, val url: String, val fp: String, val token:
     companion object { fun fromJson(j: JSONObject) = Session(j.getString("name"),j.getString("url"),j.getString("fp"),j.getString("token")) }
 }
 data class Chat(val id: String, val title: String, val active: Boolean, val projectId: String?=null)
-data class Message(val id: String, val role: String, val markdown: String,val images:List<Picture> = emptyList(),val files:List<GeneratedFile> = emptyList())
+data class SentAttachment(val id:String,val name:String)
+data class Message(val id: String, val role: String, val markdown: String,val images:List<Picture> = emptyList(),val files:List<GeneratedFile> = emptyList(),val attachedFiles:List<SentAttachment> = emptyList())
 data class Approval(val id: String, val summary: String, val acceptLabel: String, val declineLabel: String)
 data class Project(val id:String,val title:String)
 data class ComposerSetting(val key:String,val label:String,val value:String,val enabled:Boolean,val reason:String?)
 data class SettingOption(val id:String,val label:String,val selected:Boolean,val disabled:Boolean)
 data class SettingMenu(val key:String,val contextId:String,val revision:String,val options:List<SettingOption>)
-data class Confirmation(val id:String,val summary:String,val acceptLabel:String,val declineLabel:String)
+data class Confirmation(val id:String,val summary:String,val acceptLabel:String,val declineLabel:String,val surfaceId:String?=null)
 private fun JSONObject.nullable(key:String)=optString(key).takeUnless{it.isBlank()||it=="null"}
 private fun <T> JSONObject.list(key:String,parse:(JSONObject)->T):List<T>{val a=optJSONArray(key)?:return emptyList();return (0 until a.length()).map{parse(a.getJSONObject(it))}}
 data class Snapshot(val connected:Boolean=false,val compatible:Boolean=false,val error:String?=null,val threadId:String?=null,val title:String="连接你的电脑",val messages:List<Message> = emptyList(),val chats:List<Chat> = emptyList(),val draftPresent:Boolean=false,val busy:Boolean=false,val approvals:List<Approval> = emptyList(),val canLoadOlder:Boolean=false,
     val protocolVersion:Int=1,val contextId:String?=null,val screen:String="chat",val projects:List<Project> = emptyList(),val currentProjectId:String?=null,val settings:List<ComposerSetting> = emptyList(),val settingsRevision:String="",val menu:SettingMenu?=null,val confirmation:Confirmation?=null,val canCreate:Boolean=false,
     val surfaces:List<RemoteSurface> = emptyList(),val queue:List<QueueItem> = emptyList(),val attachments:List<RemoteAction> = emptyList(),val sendLabel:String="",val sendEnabled:Boolean=false,val composerPlaceholder:String="",val composerContext:String="",val composerContextEditable:Boolean=false,val composerRevision:String="") {
+    val activeDialog:RemoteSurface? get()=surfaces.lastOrNull{it.kind=="dialog"}
+    val activeConfirmation:Confirmation? get()=confirmation?.takeIf{it.surfaceId==null||activeDialog==null||it.surfaceId==activeDialog?.id}
+    val modalId:String? get()=activeDialog?.id?:activeConfirmation?.id
+    val hasModal:Boolean get()=modalId!=null
     companion object {
         fun parse(j:JSONObject):Snapshot {
             val menu=j.optJSONObject("menu")?.let{m->SettingMenu(m.getString("key"),m.getString("contextId"),m.getString("revision"),m.list("options"){o->SettingOption(o.getString("id"),o.getString("label"),o.optBoolean("selected"),o.optBoolean("disabled"))})}
-            val confirmation=j.optJSONObject("confirmation")?.let{c->Confirmation(c.getString("id"),c.getString("summary"),c.getString("acceptLabel"),c.getString("declineLabel"))}
+            val confirmation=j.optJSONObject("confirmation")?.let{c->Confirmation(c.getString("id"),c.getString("summary"),c.getString("acceptLabel"),c.getString("declineLabel"),c.nullable("surfaceId"))}
             return Snapshot(connected=j.optBoolean("connected"),compatible=j.optBoolean("compatible"),error=j.nullable("error"),threadId=j.nullable("threadId"),title=j.optString("title","Codex"),
-                messages=j.list("messages"){m->Message(m.getString("id"),m.getString("role"),m.getString("markdown"),m.rows("images"){Picture.parse(it)},m.rows("files"){GeneratedFile.parse(it)})},
+                messages=j.list("messages"){m->Message(m.getString("id"),m.getString("role"),m.getString("markdown"),m.rows("images"){Picture.parse(it)},m.rows("files"){GeneratedFile.parse(it)},m.rows("attachedFiles"){SentAttachment(it.getString("id"),it.getString("name"))})},
                 chats=j.list("chats"){c->Chat(c.getString("id"),c.getString("title"),c.optBoolean("active"),c.nullable("projectId"))},
                 draftPresent=j.optBoolean("draftPresent"),busy=j.optBoolean("busy"),approvals=j.list("approvals"){a->Approval(a.getString("id"),a.getString("summary"),a.getString("acceptLabel"),a.getString("declineLabel"))},canLoadOlder=j.optBoolean("canLoadOlder"),
                 protocolVersion=j.optInt("protocolVersion",1),contextId=j.nullable("contextId")?:j.nullable("threadId"),screen=j.optString("screen","chat"),projects=j.list("projects"){p->Project(p.getString("id"),p.getString("title"))},currentProjectId=j.nullable("currentProjectId"),

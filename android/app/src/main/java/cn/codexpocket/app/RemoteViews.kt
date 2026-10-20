@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -39,8 +40,11 @@ import java.io.ByteArrayOutputStream
     val picker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){it?.let{vm.uploadUri(it)}}
     val ready=s.socketConnected&&s.snapshot.compatible&&s.pendingId==null&&!s.uploading
     val menu=s.remoteMenu?.takeIf{allowMenus}
-    val dialog=s.snapshot.surfaces.lastOrNull{it.kind=="dialog"}
+    val dialog=s.snapshot.activeDialog
+    val confirmation=s.snapshot.activeConfirmation
+    val canCancel=s.socketConnected&&s.snapshot.compatible&&s.dialogClosePendingId==null&&(confirmation!=null||dialog?.dismissAction!=null)
     LaunchedEffect(s.snapshot.contextId){files=false;sources=false;drawing=false;drawingPreview=null;confirm=null}
+    LaunchedEffect(s.snapshot.modalId){if(s.snapshot.hasModal){files=false;sources=false;drawing=false;drawingPreview=null;confirm=null}}
     if(menu!=null&&!sources&&!files&&!drawing&&drawingPreview==null){
         ModalBottomSheet(onDismissRequest={vm.closeMenu()}){
             Column(Modifier.fillMaxWidth().heightIn(max=560.dp).verticalScroll(rememberScrollState()).padding(20.dp)){
@@ -63,9 +67,24 @@ import java.io.ByteArrayOutputStream
             }
         }
     }
-    if(dialog!=null&&s.snapshot.confirmation==null)Dialog(onDismissRequest={},properties=DialogProperties(usePlatformDefaultWidth=false)){
+    if(confirmation!=null)AlertDialog(onDismissRequest={if(canCancel)vm.dismissDialog()},title={Text(dialog?.title?.ifBlank{"桌面权限确认"}?:"桌面权限确认")},text={
+        Column(Modifier.heightIn(max=440.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+            Text(confirmation.summary)
+            if(s.dialogClosePendingId!=null)Text("正在取消电脑弹窗…")
+            s.notice?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+            if(!s.socketConnected)TextButton(onClick={vm.connect()}){Text("重新连接电脑")}
+        }
+    },confirmButton={TextButton(onClick={vm.confirm(confirmation,true)},enabled=ready&&s.dialogClosePendingId==null){Text(confirmation.acceptLabel)}},dismissButton={TextButton(onClick={vm.dismissDialog()},enabled=canCancel){Text(confirmation.declineLabel)}})
+    else if(dialog!=null)Dialog(onDismissRequest={if(canCancel)vm.dismissDialog()},properties=DialogProperties(usePlatformDefaultWidth=false)){
         Surface(Modifier.fillMaxWidth().padding(16.dp).heightIn(max=680.dp),shape=RoundedCornerShape(24.dp)){
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)){RemoteForm(dialog,ready){a,f->if(a.confirm)confirm=dialog to a else vm.remote(dialog,a,f)};if(dialog.actions.isEmpty()&&dialog.fields.isEmpty())TextButton(onClick={vm.closeMenu()},enabled=ready){Text("关闭")}}
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)){
+                Row(verticalAlignment=Alignment.CenterVertically){Text("电脑弹窗",modifier=Modifier.weight(1f),color=MaterialTheme.colorScheme.onSurfaceVariant);IconButton(onClick={vm.dismissDialog()},enabled=canCancel){Icon(Icons.Rounded.Close,"取消桌面弹窗")}}
+                RemoteForm(dialog.copy(actions=dialog.actions.filterNot{it.id==dialog.dismissActionId}),ready&&s.dialogClosePendingId==null){a,f->if(a.confirm)confirm=dialog to a else vm.remote(dialog,a,f)}
+                dialog.dismissAction?.let{a->TextButton(onClick={vm.dismissDialog()},enabled=canCancel,modifier=Modifier.fillMaxWidth()){Text(if(s.dialogClosePendingId!=null)"正在关闭…" else a.label)}}
+                if(dialog.dismissAction==null)Text("桌面未提供可安全同步的关闭按钮，请在电脑处理此弹窗。",style=MaterialTheme.typography.bodySmall)
+                s.notice?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+                if(!s.socketConnected)TextButton(onClick={vm.connect()}){Text("重新连接电脑")}
+            }
         }
     }
     confirm?.let{(surface,action)->AlertDialog(onDismissRequest={confirm=null},title={Text("确认"+action.label.lineSequence().first()+"？")},text={Text("将操作电脑上的当前聊天。")},confirmButton={TextButton(onClick={vm.remote(surface,action);confirm=null},enabled=ready){Text("确认")}},dismissButton={TextButton(onClick={confirm=null}){Text("取消")}})}
@@ -122,8 +141,32 @@ import java.io.ByteArrayOutputStream
         surface.fields.forEach{f->RemoteFieldView(f,values[f.id]?:f.value,enabled){values=values+(f.id to it);edited=(edited+f.id).distinct();conflict=false}}
         surface.actions.forEach{a->OutlinedButton(onClick={onAction(a,changed)},enabled=enabled&&(!a.disabled||changed.isNotEmpty()&&Regex("^(发送|提交|确认|保存|下一|Send|Submit|Confirm|Save|Next)",RegexOption.IGNORE_CASE).containsMatchIn(a.label)),modifier=Modifier.fillMaxWidth()){
             if(a.selected){Icon(Icons.Rounded.CheckCircle,null);Spacer(Modifier.width(8.dp))}
-            Text(a.label,modifier=Modifier.weight(1f))
+            Column(Modifier.weight(1f)){Text(a.label);if(a.description.isNotBlank())Text(a.description,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
         }}
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun QuestionPanel(s:UiState,vm:PocketViewModel,onConfirm:(RemoteSurface,RemoteAction)->Unit){
+    val questions=s.snapshot.surfaces.filter{it.kind=="question"}
+    val questionKey=questions.joinToString("|"){it.id+":"+it.title}
+    val savedAnswers=rememberSaveableStateHolder()
+    var open by rememberSaveable(s.snapshot.contextId){mutableStateOf(false)}
+    LaunchedEffect(questionKey,s.snapshot.hasModal){open=questionKey.isNotBlank()&&!s.snapshot.hasModal}
+    if(questions.isEmpty())return
+    val ready=s.socketConnected&&s.snapshot.compatible&&s.pendingId==null&&!s.snapshot.hasModal
+    FilledTonalButton(onClick={open=true},enabled=!s.snapshot.hasModal,modifier=Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=4.dp)){
+        Icon(Icons.Rounded.QuestionAnswer,null);Spacer(Modifier.width(8.dp));Text("电脑有问题待回答 · 点击选择或输入")
+    }
+    if(open&&!s.snapshot.hasModal)ModalBottomSheet(onDismissRequest={open=false}){
+        Column(Modifier.fillMaxWidth().heightIn(max=640.dp).verticalScroll(rememberScrollState()).imePadding().padding(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)){
+            Row(verticalAlignment=Alignment.CenterVertically){Text("回答电脑的问题",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f));IconButton(onClick={open=false}){Icon(Icons.Rounded.Close,"收起问答")}}
+            Text("选项、上一题、下一题与提交均同步电脑；收起不会跳过问题。",style=MaterialTheme.typography.bodySmall)
+            questions.forEach{q->savedAnswers.SaveableStateProvider(q.id){RemoteForm(q,ready){a,f->if(a.confirm)onConfirm(q,a)else vm.remote(q,a,f)}}}
+            if(s.pendingId!=null)LinearProgressIndicator(Modifier.fillMaxWidth())
+            s.notice?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+            if(!s.socketConnected)TextButton(onClick={vm.connect()}){Text("重新连接电脑")}
+        }
     }
 }
 

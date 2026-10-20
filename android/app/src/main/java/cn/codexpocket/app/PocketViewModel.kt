@@ -39,8 +39,8 @@ import javax.net.ssl.X509TrustManager
 
 data class UiState(val session: Session?=null,val socketConnected: Boolean=false,val connecting: Boolean=false,val pairing: Boolean=false,val snapshot: Snapshot=Snapshot(),val notice: String?=null,val pendingId: String?=null,val pendingUnknown: Boolean=false,val draft: String="",val clearDraftOnSuccess: Boolean=false,val theme:String="system",
     val uploading:Boolean=false,val staged:List<StagedFile> = emptyList(),val files:FileListing?=null,val filesLoading:Boolean=false,val hiddenMenuId:String?=null,
-    val downloadingId:String?=null,val downloadProgress:Int=0,val openableFile:OpenableFile?=null){
-    val remoteMenu:RemoteSurface? get()=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.takeIf{hiddenMenuId==null}
+    val downloadingId:String?=null,val downloadProgress:Int=0,val openableFile:OpenableFile?=null,val dialogClosePendingId:String?=null){
+    val remoteMenu:RemoteSurface? get()=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.takeIf{hiddenMenuId==null&&!snapshot.hasModal}
     fun hideMenu()=copy(hiddenMenuId=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.id?:hiddenMenuId)
 }
 
@@ -114,9 +114,9 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
                     "snapshot"->{val seq=j.optLong("seq");if(seq>=lastSeq){lastSeq=seq;val snapshot=Snapshot.parse(j.getJSONObject("snapshot"));mutable.update{
                         val oldKey=it.snapshot.contextId;val newKey=snapshot.contextId
                         if(oldKey!=null)drafts.put(oldKey,it.draft)
-                        it.copy(snapshot=snapshot,draft=if(newKey==oldKey)it.draft else drafts.optString(newKey?:""),staged=staged[newKey]?:emptyList(),hiddenMenuId=if(newKey!=oldKey||snapshot.surfaces.none{x->x.kind=="menu"})null else it.hiddenMenuId)
+                        it.copy(snapshot=snapshot,draft=if(newKey==oldKey)it.draft else drafts.optString(newKey?:""),staged=staged[newKey]?:emptyList(),hiddenMenuId=if(newKey!=oldKey||snapshot.surfaces.none{x->x.kind=="menu"})null else it.hiddenMenuId,dialogClosePendingId=if(newKey!=oldKey||snapshot.modalId!=it.snapshot.modalId)null else it.dialogClosePendingId)
                     }}}
-                    "result"->{val result=j.getJSONObject("result");if(dismissals.remove(result.optString("id"))){if(result.optString("status")!="sent")notice(result.optString("message","电脑菜单暂未关闭，可重试。"))}else applyResult(result)}
+                    "result"->{val result=j.getJSONObject("result");if(dismissals.remove(result.optString("id"))){mutable.update{it.copy(dialogClosePendingId=if(it.dialogClosePendingId==result.optString("id"))null else it.dialogClosePendingId)};if(result.optString("status")!="sent")notice(result.optString("message","电脑弹窗或菜单暂未关闭，请核对后重试。"))}else applyResult(result)}
                     "error"->mutable.update{it.copy(notice=j.optString("message","操作失败。"))}
                 }}catch(_:Exception){mutable.update{it.copy(notice="同步数据不兼容，请更新手机和电脑端。")}}
                 }
@@ -173,6 +173,21 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
         val id=UUID.randomUUID().toString();if(dismissals.size>=64)dismissals.remove(dismissals.first());dismissals.add(id)
         val request=JSONObject().put("id",id).put("type","ui-close").put("threadId",context)
         if(socket?.send(request.toString())!=true){dismissals.remove(id);notice("手机菜单已关闭；电脑菜单未确认，可连接后重试。")} 
+    }
+
+    // Cancel is independent of an uncertain chat operation: never erase or
+    // retry that operation just to reach the desktop's cancel button.
+    fun dismissDialog(){
+        val s=mutable.value;val context=s.snapshot.contextId?:return
+        if(!s.socketConnected||!s.snapshot.compatible||s.dialogClosePendingId!=null)return
+        val c=s.snapshot.activeConfirmation;val d=s.snapshot.activeDialog
+        val request=if(c!=null)JSONObject().put("type","confirm").put("confirmationId",c.id).put("decision","decline")
+            else if(d?.dismissAction!=null)JSONObject().put("type","ui-action").put("surfaceId",d.id).put("revision",d.revision).put("actionId",d.dismissAction!!.id)
+            else{notice("桌面未提供可安全同步的关闭按钮，请在电脑处理此弹窗。");return}
+        val id=UUID.randomUUID().toString();if(dismissals.size>=64)dismissals.remove(dismissals.first());dismissals.add(id)
+        request.put("id",id).put("threadId",context);mutable.update{it.copy(dialogClosePendingId=id,notice=null)}
+        if(socket?.send(request.toString())!=true){dismissals.remove(id);mutable.update{it.copy(dialogClosePendingId=null,notice="弹窗关闭结果待确认；恢复连接后请检查，不会自动重发。")};return}
+        viewModelScope.launch{delay(5000);mutable.update{if(it.dialogClosePendingId==id)it.copy(dialogClosePendingId=null,notice="尚未确认电脑弹窗已关闭，请检查当前弹窗后再操作。")else it}}
     }
 
     fun remote(surface:RemoteSurface,action:RemoteAction,fields:Map<String,String> = emptyMap()){operate("ui-action",JSONObject().put("surfaceId",surface.id).put("revision",surface.revision).put("actionId",action.id).put("fields",JSONObject(fields)))}
@@ -273,6 +288,7 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
     private fun operate(type:String,extra:JSONObject=JSONObject(),threadId:String?=mutable.value.snapshot.contextId) {
         val s=mutable.value
         if(!s.socketConnected||!s.snapshot.compatible||s.pendingId!=null||threadId==null){notice("当前无法操作，请确认电脑已连接，并处理待确认的操作。");return}
+        if(s.snapshot.hasModal&&type !in listOf("confirm","ui-action","ui-input")){notice("请先确认或取消当前桌面弹窗。");return}
         if(type=="send"&&s.snapshot.draftPresent){notice("电脑有未发送的草稿，请先处理。");return}
         val id=UUID.randomUUID().toString();extra.put("id",id).put("type",type).put("threadId",threadId)
         pendingKind=type

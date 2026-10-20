@@ -66,13 +66,14 @@ class MainActivity:ComponentActivity(){
     val c=MaterialTheme.colorScheme
     val ready=s.socketConnected&&s.snapshot.compatible&&s.pendingId==null
     LaunchedEffect(s.pendingId,s.snapshot.contextId){if(createPending&&s.pendingId==null){createPending=false;if(s.snapshot.screen=="new")page="chat"}}
+    LaunchedEffect(s.snapshot.contextId,s.snapshot.modalId,s.snapshot.compatible){if(s.snapshot.hasModal||!s.snapshot.compatible){settingKey=null;approval=null;drawer.close()}}
     if(manual)AlertDialog(onDismissRequest={manual=false},title={Text("粘贴配对内容")},text={OutlinedTextField(value=raw,onValueChange={raw=it},label={Text("电脑上的配对内容")},minLines=4,maxLines=8)},confirmButton={TextButton(onClick={scanned=raw;manual=false;raw=""}){Text("下一步")}},dismissButton={TextButton(onClick={manual=false}){Text("取消")}})
     scanned?.let{data->val pairing=remember(data){runCatching{Pairing.parse(data)}}
         AlertDialog(onDismissRequest={scanned=null},title={Text(if(pairing.isSuccess)"连接这台电脑？" else "无法识别配对内容")},text={Text(pairing.getOrNull()?.let{"${it.name}\n请确认这是你电脑上显示的二维码。"}?:pairing.exceptionOrNull()?.message?:"请重新扫码。")},confirmButton={TextButton(onClick={scanned=null;if(pairing.isSuccess)vm.pair(data)}){Text(if(pairing.isSuccess)"确认连接" else "知道了")}},dismissButton={TextButton(onClick={scanned=null}){Text("取消")}})
     }
     if(forget)AlertDialog(onDismissRequest={forget=false},title={Text("移除这台电脑？")},text={Text("本机将删除连接凭据与草稿。重新配对前，请在电脑撤销旧手机授权。")},confirmButton={TextButton(onClick={vm.forget();forget=false;page="chat"}){Text("移除")}},dismissButton={TextButton(onClick={forget=false}){Text("取消")}})
-    approval?.let{(a,accept)->AlertDialog(onDismissRequest={approval=null},title={Text(if(accept)"批准这次操作？" else "拒绝这次操作？")},text={Column(Modifier.heightIn(max=400.dp).verticalScroll(rememberScrollState())){Text(a.summary)}},confirmButton={TextButton(onClick={vm.approve(a,accept);approval=null},enabled=ready){Text(if(accept)"批准" else "拒绝")}},dismissButton={TextButton(onClick={approval=null}){Text("取消")}})}
-    settingKey?.let{key->
+    approval?.takeIf{!s.snapshot.hasModal}?.let{(a,accept)->AlertDialog(onDismissRequest={approval=null},title={Text(if(accept)"批准这次操作？" else "拒绝这次操作？")},text={Column(Modifier.heightIn(max=400.dp).verticalScroll(rememberScrollState())){Text(a.summary)}},confirmButton={TextButton(onClick={vm.approve(a,accept);approval=null},enabled=ready){Text(if(accept)"批准" else "拒绝")}},dismissButton={TextButton(onClick={approval=null}){Text("取消")}})}
+    settingKey?.takeIf{!s.snapshot.hasModal}?.let{key->
         val menu=s.snapshot.menu?.takeIf{it.key==key&&it.contextId==s.snapshot.contextId&&it.revision==s.snapshot.settingsRevision}
         ModalBottomSheet(onDismissRequest={settingKey=null},containerColor=c.surface){
             Column(Modifier.fillMaxWidth().padding(horizontal=24.dp).padding(bottom=24.dp)){
@@ -140,7 +141,7 @@ class MainActivity:ComponentActivity(){
         Spacer(Modifier.height(28.dp));Button(onClick=onScan,enabled=!s.pairing,modifier=Modifier.fillMaxWidth().height(52.dp)){Icon(Icons.Rounded.QrCodeScanner,null);Spacer(Modifier.width(8.dp));Text(if(s.pairing)"正在连接…" else "扫描电脑二维码")}
         TextButton(onClick=onManual,enabled=!s.pairing,modifier=Modifier.align(Alignment.CenterHorizontally)){Text("无法扫码？粘贴配对内容")}
         s.notice?.let{Text(it,color=c.error,fontSize=13.sp)}
-        Text("个人远程工具 · 0.4.0",color=c.onSurfaceVariant,fontSize=11.sp,modifier=Modifier.padding(top=24.dp))
+        Text("个人远程工具 · 0.4.1",color=c.onSurfaceVariant,fontSize=11.sp,modifier=Modifier.padding(top=24.dp))
     }
 }
 
@@ -167,7 +168,7 @@ class MainActivity:ComponentActivity(){
         SectionLabel("外观")
         listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(value,label)->ListItem(headlineContent={Text(label)},leadingContent={RadioButton(s.theme==value,{vm.theme(value)})},modifier=Modifier.clickable{vm.theme(value)})}
         Spacer(Modifier.height(24.dp));HorizontalDivider();TextButton(onClick=onForget,modifier=Modifier.padding(top=16.dp)){Icon(Icons.Rounded.LinkOff,null);Spacer(Modifier.width(8.dp));Text("解除这台电脑的配对")}
-        Text("Codex Pocket 0.4.0\n手机与桌面共用同一聊天和操作状态。",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=24.dp))
+        Text("Codex Pocket 0.4.1\n手机与桌面共用同一聊天和操作状态。",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=24.dp))
     }
 }
 
@@ -175,12 +176,13 @@ class MainActivity:ComponentActivity(){
     val list=rememberLazyListState();val scope=rememberCoroutineScope()
     var following by remember{mutableStateOf(true)}
     var remoteConfirm by remember{mutableStateOf<Pair<RemoteSurface,RemoteAction>?>(null)}
-    remoteConfirm?.let{(surface,action)->AlertDialog(onDismissRequest={remoteConfirm=null},title={Text("确认"+action.label+"？")},text={Text(surface.title)},confirmButton={TextButton(onClick={vm.remote(surface,action);remoteConfirm=null}){Text("确认")}},dismissButton={TextButton(onClick={remoteConfirm=null}){Text("取消")}})}
+    remoteConfirm?.takeIf{!s.snapshot.hasModal}?.let{(surface,action)->AlertDialog(onDismissRequest={remoteConfirm=null},title={Text("确认"+action.label+"？")},text={Text(surface.title)},confirmButton={TextButton(onClick={vm.remote(surface,action);remoteConfirm=null}){Text("确认")}},dismissButton={TextButton(onClick={remoteConfirm=null}){Text("取消")}})}
     LaunchedEffect(list){snapshotFlow{list.isScrollInProgress to list.canScrollForward}.collect{(scrolling,canForward)->if(scrolling)following=!canForward}}
     LaunchedEffect(s.snapshot.contextId){following=true}
     LaunchedEffect(s.snapshot.contextId,s.snapshot.messages.size,s.snapshot.messages.lastOrNull()?.markdown){if(following&&s.snapshot.messages.isNotEmpty())list.scrollToItem((s.snapshot.messages.size).coerceAtMost((list.layoutInfo.totalItemsCount-1).coerceAtLeast(0)))}
     val ready=s.socketConnected&&s.snapshot.compatible&&s.pendingId==null
     Column(modifier.fillMaxSize()){
+        QuestionPanel(s,vm){q,a->remoteConfirm=q to a}
         if(!s.snapshot.compatible)Notice(s.snapshot.error?:"等待桌面连接，请通过配套启动器打开 Codex。",true)
         if(s.snapshot.protocolVersion<2&&s.snapshot.connected)Notice("请更新电脑端以使用新建聊天和模式同步。",true)
         s.notice?.let{Notice(it,onDismiss=if(s.pendingUnknown)null else {{vm.notice(null)}})}
@@ -190,10 +192,9 @@ class MainActivity:ComponentActivity(){
             LazyColumn(state=list,modifier=Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp,20.dp),verticalArrangement=Arrangement.spacedBy(24.dp)){
                 if(s.snapshot.canLoadOlder)item(key="history"){TextButton(onClick={following=false;vm.history()},enabled=ready){Icon(Icons.Rounded.ExpandLess,null);Text("加载更早的消息")}}
                 items(s.snapshot.messages,key={it.id}){MessageCard(it,vm)}
-                items(s.snapshot.surfaces.filter{it.kind=="question"||it.kind=="goal"},key={"question-"+it.id}){q->OutlinedCard{Column(Modifier.padding(16.dp)){RemoteForm(q,ready){a,f->if(a.confirm)remoteConfirm=q to a else vm.remote(q,a,f)}}}}
+                items(s.snapshot.surfaces.filter{it.kind=="goal"},key={"question-"+it.id}){q->OutlinedCard{Column(Modifier.padding(16.dp)){RemoteForm(q,ready){a,f->if(a.confirm)remoteConfirm=q to a else vm.remote(q,a,f)}}}}
                 if(s.snapshot.busy)item(key="busy"){Row(verticalAlignment=Alignment.CenterVertically){CircularProgressIndicator(Modifier.size(14.dp),strokeWidth=1.5.dp);Spacer(Modifier.width(10.dp));Text("Codex 正在工作…",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)}}
                 items(s.snapshot.approvals,key={"approval-${it.id}"}){a->RequestCard("需要确认",a.summary,a.acceptLabel,a.declineLabel,ready,{onApprove(a,true)},{onApprove(a,false)})}
-                s.snapshot.confirmation?.let{c->item(key="confirmation-${c.id}"){RequestCard("权限确认",c.summary,c.acceptLabel,c.declineLabel,ready,{vm.confirm(c,true)},{vm.confirm(c,false)})}}
             }
             if(!following&&s.snapshot.messages.isNotEmpty())SmallFloatingActionButton(onClick={following=true;scope.launch{list.animateScrollToItem((list.layoutInfo.totalItemsCount-1).coerceAtLeast(0))}},modifier=Modifier.align(Alignment.BottomEnd).padding(16.dp)){Icon(Icons.Rounded.ArrowDownward,"回到底部")}
         }
@@ -202,7 +203,7 @@ class MainActivity:ComponentActivity(){
 
 @Composable private fun RequestCard(title:String,text:String,accept:String,decline:String,enabled:Boolean,onAccept:()->Unit,onDecline:()->Unit){OutlinedCard{Column(Modifier.padding(16.dp)){Text(title,fontWeight=FontWeight.Bold);Text(text,fontSize=13.sp,modifier=Modifier.padding(vertical=12.dp));Row{OutlinedButton(onClick=onDecline,enabled=enabled){Text(decline)};Spacer(Modifier.width(12.dp));Button(onClick=onAccept,enabled=enabled){Text(accept)}}}}}
 @Composable private fun Notice(text:String,warning:Boolean=false,onDismiss:(()->Unit)?=null){val c=MaterialTheme.colorScheme;Surface(color=if(warning)c.errorContainer else c.surfaceVariant){Row(Modifier.fillMaxWidth().padding(14.dp,10.dp),verticalAlignment=Alignment.CenterVertically){Text(text,fontSize=12.sp,lineHeight=18.sp,color=if(warning)c.onErrorContainer else c.onSurfaceVariant,modifier=Modifier.weight(1f));onDismiss?.let{IconButton(onClick=it,modifier=Modifier.size(28.dp)){Icon(Icons.Rounded.Close,"关闭提示",Modifier.size(16.dp))}}}}}
-@Composable private fun MessageCard(m:Message,vm:PocketViewModel){val user=m.role=="user";val c=MaterialTheme.colorScheme;Column(Modifier.fillMaxWidth(),horizontalAlignment=if(user)Alignment.End else Alignment.Start){if(!user)Text(if(m.role=="activity")"执行详情" else "Codex",fontSize=12.sp,fontWeight=FontWeight.SemiBold,color=c.primary,modifier=Modifier.padding(bottom=8.dp));if(m.markdown.isNotBlank())if(user)Surface(shape=RoundedCornerShape(18.dp),color=c.surfaceVariant){Text(m.markdown,Modifier.padding(16.dp,12.dp),fontSize=15.sp,lineHeight=23.sp)}else Markdown(m.markdown);m.images.forEach{RemotePicture(it,vm)};m.files.forEach{GeneratedFileCard(it,vm)}}}
+@Composable private fun MessageCard(m:Message,vm:PocketViewModel){val user=m.role=="user";val c=MaterialTheme.colorScheme;Column(Modifier.fillMaxWidth(),horizontalAlignment=if(user)Alignment.End else Alignment.Start){if(!user)Text(if(m.role=="activity")"执行详情" else "Codex",fontSize=12.sp,fontWeight=FontWeight.SemiBold,color=c.primary,modifier=Modifier.padding(bottom=8.dp));if(m.markdown.isNotBlank())if(user)Surface(shape=RoundedCornerShape(18.dp),color=c.surfaceVariant){Text(m.markdown,Modifier.padding(16.dp,12.dp),fontSize=15.sp,lineHeight=23.sp)}else Markdown(m.markdown);m.images.forEach{RemotePicture(it,vm)};m.attachedFiles.forEach{a->OutlinedCard(Modifier.padding(vertical=4.dp)){Row(Modifier.padding(12.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Rounded.AttachFile,null);Spacer(Modifier.width(8.dp));Column{Text(a.name);Text("已发送附件",style=MaterialTheme.typography.bodySmall,color=c.onSurfaceVariant)}}}};m.files.forEach{GeneratedFileCard(it,vm)}}}
 @Composable private fun Markdown(text:String){
     val context=LocalContext.current;val markwon=remember(context){Markwon.create(context)};val clipboard=LocalClipboardManager.current;val c=MaterialTheme.colorScheme
     val chunks=remember(text){Regex("(?s)```([^\\n`]*)\\n(.*?)(?:```|$)").findAll(text).toList()}
@@ -225,9 +226,10 @@ class MainActivity:ComponentActivity(){
     val c=MaterialTheme.colorScheme;val ready=s.socketConnected&&s.snapshot.compatible&&s.pendingId==null&&!s.uploading
     var stopConfirm by remember{mutableStateOf(false)}
     var goalConfirm by remember{mutableStateOf(false)}
+    LaunchedEffect(s.snapshot.modalId){if(s.snapshot.hasModal){stopConfirm=false;goalConfirm=false}}
     val goalMode=s.snapshot.surfaces.any{it.kind=="composer"&&it.actions.any{a->a.label=="目标"}}
-    if(goalConfirm)AlertDialog(onDismissRequest={goalConfirm=false},title={Text("将这条消息设为目标？")},text={Text(s.draft,maxLines=8,overflow=TextOverflow.Ellipsis)},confirmButton={TextButton(onClick={vm.send();goalConfirm=false},enabled=ready&&goalMode){Text("设为目标")}},dismissButton={TextButton(onClick={goalConfirm=false}){Text("取消")}})
-    if(stopConfirm)AlertDialog(onDismissRequest={stopConfirm=false},title={Text("停止当前任务？")},text={Text("这会停止电脑上正在执行的任务。")},confirmButton={TextButton(onClick={vm.stop();stopConfirm=false},enabled=ready){Text("停止任务")}},dismissButton={TextButton(onClick={stopConfirm=false}){Text("继续执行")}})
+    if(goalConfirm&&!s.snapshot.hasModal)AlertDialog(onDismissRequest={goalConfirm=false},title={Text("将这条消息设为目标？")},text={Text(s.draft,maxLines=8,overflow=TextOverflow.Ellipsis)},confirmButton={TextButton(onClick={vm.send();goalConfirm=false},enabled=ready&&goalMode){Text("设为目标")}},dismissButton={TextButton(onClick={goalConfirm=false}){Text("取消")}})
+    if(stopConfirm&&!s.snapshot.hasModal)AlertDialog(onDismissRequest={stopConfirm=false},title={Text("停止当前任务？")},text={Text("这会停止电脑上正在执行的任务。")},confirmButton={TextButton(onClick={vm.stop();stopConfirm=false},enabled=ready){Text("停止任务")}},dismissButton={TextButton(onClick={stopConfirm=false}){Text("继续执行")}})
     Column(Modifier.background(c.background).navigationBarsPadding().imePadding().padding(12.dp)){
         if(s.snapshot.draftPresent)Text("电脑有未发送草稿，请先处理。",color=c.error,fontSize=12.sp,modifier=Modifier.padding(6.dp,4.dp))
         Column(Modifier.heightIn(max=220.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)){s.snapshot.queue.forEach{QueueCard(it,s,vm)}}
@@ -249,7 +251,7 @@ class MainActivity:ComponentActivity(){
                         }}
                     }
                     Spacer(Modifier.width(6.dp))
-                    FilledIconButton(onClick={if(s.snapshot.busy&&s.draft.isBlank()&&s.snapshot.attachments.isEmpty())stopConfirm=true else if(goalMode)goalConfirm=true else vm.send()},enabled=ready&&(s.snapshot.busy||s.draft.isNotBlank()||s.snapshot.attachments.isNotEmpty())&&s.staged.isEmpty()&&(!s.snapshot.draftPresent||s.snapshot.busy&&s.draft.isBlank()),modifier=Modifier.size(40.dp)){
+                    FilledIconButton(onClick={if(s.snapshot.busy&&s.draft.isBlank()&&s.snapshot.attachments.isEmpty())stopConfirm=true else if(goalMode)goalConfirm=true else vm.send()},enabled=ready&&(s.snapshot.sendEnabled||s.snapshot.busy&&s.draft.isBlank())&&(s.snapshot.busy||s.draft.isNotBlank()||s.snapshot.attachments.isNotEmpty())&&s.staged.isEmpty()&&(!s.snapshot.draftPresent||s.snapshot.busy&&s.draft.isBlank()),modifier=Modifier.size(40.dp)){
                         if(s.pendingId!=null&&!s.pendingUnknown)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=2.dp)
                         else Icon(if(s.snapshot.busy&&s.draft.isBlank()&&s.snapshot.attachments.isEmpty())Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.Send,if(s.snapshot.busy&&s.draft.isBlank()&&s.snapshot.attachments.isEmpty())"停止当前任务" else "发送指令",Modifier.size(20.dp))
                     }
