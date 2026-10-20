@@ -68,7 +68,7 @@ export class Companion {
         const u=new URL(req.url||'/','https://localhost');
         if(req.method==='POST'&&u.pathname==='/api/pair'){
           const body=await jsonBody(req);if(typeof body.code!=='string')return json(res,400,{error:'BAD_PAIR'});
-          const token=this.identity.pair(body.code,req.socket.remoteAddress||'unknown');return json(res,200,{token,name:os.hostname(),version:'0.4.1'});
+          const token=this.identity.pair(body.code,req.socket.remoteAddress||'unknown');return json(res,200,{token,name:os.hostname(),version:'0.4.2'});
         }
         if(!this.identity.authenticate(bearer(req)))return json(res,401,{error:'UNAUTHORIZED'});
         if(req.method==='GET'&&/^\/api\/downloads\/[0-9a-f-]{36}$/.test(u.pathname)&&this.desktop.download){
@@ -115,7 +115,7 @@ export class Companion {
   }
   async adminStatus(){
     const p=this.identity.pairing();const qr=this.tlsInfo&&!this.identity.paired()?JSON.stringify({v:1,name:os.hostname(),url:this.tlsInfo.url,fp:this.tlsInfo.fingerprint,code:p.code}):null;
-    return{network:this.tlsInfo,paired:this.identity.paired(),expiresAt:p.expiresAt,qr:qr?await QRCode.toDataURL(qr,{width:360,margin:2,errorCorrectionLevel:'M'}):null,pairingText:qr,desktop:{connected:this.latest.connected,compatible:this.latest.compatible,error:this.latest.error,title:this.latest.title,version:this.latest.desktopVersion},version:'0.4.1'};
+    return{network:this.tlsInfo,paired:this.identity.paired(),expiresAt:p.expiresAt,qr:qr?await QRCode.toDataURL(qr,{width:360,margin:2,errorCorrectionLevel:'M'}):null,pairingText:qr,desktop:{connected:this.latest.connected,compatible:this.latest.compatible,error:this.latest.error,title:this.latest.title,version:this.latest.desktopVersion},version:'0.4.2'};
   }
   private async poll(){if(this.polling)return;this.polling=true;try{const snapshot=await this.desktop.snapshot();const rev=crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');this.latest=snapshot;if(rev!==this.revision){this.revision=rev;this.seq++;this.broadcast({type:'snapshot',seq:this.seq,snapshot});}}catch{this.latest=emptySnapshot('桌面连接暂时中断。');this.broadcast({type:'snapshot',seq:++this.seq,snapshot:this.latest});}finally{this.polling=false}}
   private broadcast(v:unknown){const data=JSON.stringify(v);for(const ws of this.wss.clients)if(ws.readyState===WebSocket.OPEN){if(ws.bufferedAmount>4000000){ws.close(4003,'Slow client');continue;}ws.send(data)}}

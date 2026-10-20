@@ -75,7 +75,12 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
     const attachedFiles=role==='user'?Array.from(el.querySelectorAll<HTMLElement>('[data-composer-attachment-pill],button.composer-attachment-surface[aria-label],[class~="group/composer-attachment"]:not(:has(button.composer-attachment-surface))')).map((f,i)=>({id:key+':file:'+i,name:tidy(f.getAttribute('aria-label')||f.querySelector('.truncate')?.textContent||f.textContent||'附件')})).filter(f=>!!f.name):[];
     if(!markdown&&!images.length&&!attachedFiles.length)continue;
     const slotKey=key+':'+role,slot=slots.get(slotKey)||0;slots.set(slotKey,slot+1);
-    const id=slotKey+':'+slot;
+    // A completed turn hides its intermediate messages. Its final answer then
+    // occupies visible slot zero, but must not overwrite the first commentary.
+    // Prefer the desktop message identity; retain positional fallback only for
+    // versions/fixtures that do not expose a stable identity.
+    const messageId=el.getAttribute('data-message-id')||el.closest('[data-response-annotation-target]')?.getAttribute('data-response-annotation-target')||unitId?.match(/:(msg_[\w-]+|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i)?.[1];
+    const id=messageId?slotKey+':message:'+messageId:slotKey+':'+slot;
     messages.push({id,role,markdown,turnId,unitId,slot,images,attachedFiles:attachedFiles.map((f,i)=>({...f,id:id+':file:'+i}))});
     if(role==='assistant')for(const a of el.querySelectorAll('a[href],[data-file-reference][data-markdown-copy-text]'))fileLinks.push({messageId:id,href:a.getAttribute('href')||a.getAttribute('data-markdown-copy-text')||'',label:tidy(a.textContent||'')});
   }
@@ -186,7 +191,7 @@ export class CodexDesktop implements Desktop {
         if(contextId)await this.generatedFiles.observe(contextId,state.messages,fileLinks);
         if(state.threadId){state.messages=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,state.messages);}
         await this.registerImages(p);
-        return {...state,...ui,...remote,connected:true,compatible:canRespond,contextId,screen:state.threadId?'chat':'new',version:'0.4.1',protocolVersion:3,desktopVersion,menu:null,sendEnabled:false,settings:ui.settings.map(s=>({...s,enabled:false,reason:'请先处理当前问答或等待主输入框恢复'})),capabilities:{newChat:false,settings:false},error:canRespond?null:editorCount===0?'电脑主聊天输入框暂不可见，连接仍在。可先处理问答或收起右侧预览；界面恢复后会自动同步。':'电脑出现多个主聊天输入框，已暂停发送以免误操作；请保留一个主聊天，恢复后自动同步。'};
+        return {...state,...ui,...remote,connected:true,compatible:canRespond,contextId,screen:state.threadId?'chat':'new',version:'0.4.2',protocolVersion:3,desktopVersion,menu:null,sendEnabled:false,settings:ui.settings.map(s=>({...s,enabled:false,reason:'请先处理当前问答或等待主输入框恢复'})),capabilities:{newChat:false,settings:false},error:canRespond?null:editorCount===0?'电脑主聊天输入框暂不可见，连接仍在。可先处理问答或收起右侧预览；界面恢复后会自动同步。':'电脑出现多个主聊天输入框，已暂停发送以免误操作；请保留一个主聊天，恢复后自动同步。'};
       }
       if(!state.threadId){
         this.newContext=await p.locator(COMPOSER).filter({visible:true}).first().evaluate((e,candidate)=>{
@@ -218,7 +223,7 @@ export class CodexDesktop implements Desktop {
       const activeIds=await p.locator('[data-app-action-sidebar-thread-active="true"][aria-current="page"]').evaluateAll(es=>[...new Set(es.map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))]);
       const compatible=count===1&&activeIds.length<=1&&(!composerId||composerId===state.threadId);
       if(state.threadId){const merged=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,merged);state.messages=merged;}
-      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.1',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
+      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.2',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
     }catch(e){this.page=null;return emptySnapshot(e instanceof SafeError?e.message:'未连接桌面控制入口。请关闭 Codex 后，用配套启动器重新打开。');}
   }
   private async registerImages(p:Page){this.transfers.registerImages(await p.locator('img[data-pocket-image-id]').evaluateAll((es,known)=>es.filter(e=>!known.includes(e.getAttribute('data-pocket-image-id')!)).map(e=>({id:e.getAttribute('data-pocket-image-id')!,src:(e as HTMLImageElement).currentSrc||(e as HTMLImageElement).src})),this.transfers.knownImages()));}
