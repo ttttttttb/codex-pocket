@@ -1,0 +1,10 @@
+{
+  "name": "codex-pocket", "version": "0.3.1", "private": true, "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "tsc -p tsconfig.test.json && node --test --test-concurrency=1 companion/test-dist/test/*.test.js",
+    "start": "node companion/dist/main.js"
+  },
+  "dependencies": {"playwright-core":"1.58.2","qrcode":"1.5.4","selfsigned":"3.0.1","ws":"8.18.3","zod":"3.24.2"},
+  "devDependencies": {"@types/node":"24.0.0","@types/qrcode":"1.5.5","@types/ws":"8.18.1","esbuild":"0.25.5","tsx":"4.20.3","typescript":"5.8.3"}
+}

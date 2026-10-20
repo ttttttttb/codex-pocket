@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","compilerOptions":{"noEmit":false,"outDir":"companion/test-dist","rootDir":"companion"},"include":["companion/src/**/*.ts","companion/test/**/*.ts"],"exclude":["companion/dist","companion/test-dist","companion/emitted"]}
