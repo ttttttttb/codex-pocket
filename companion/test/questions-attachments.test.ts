@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {chromium} from 'playwright-core';
 import {CodexDesktop,domSnapshot,mergeMessages} from '../src/desktop.js';
 
@@ -45,14 +47,18 @@ test('sibling attachments belong to each user message, pure files and images sur
   const a=(await p.evaluate(domSnapshot)).messages;assert.equal(a.length,4);assert.equal(a[0].images!.length,1);assert.equal(a[1].images!.length,1);assert.notEqual(a[0].images![0].id,a[1].images![0].id);assert.equal(a[0].attachedFiles![0].name,'报告.pdf');assert.equal(a[2].attachedFiles![0].name,'只有文件.xlsx');assert.equal(a[2].markdown,'');assert.equal(a[3].images!.length,0);
   await p.locator('[data-turn-key]').evaluate(e=>e.setAttribute('data-turn-key','history:formal'));const next=(await p.evaluate(domSnapshot)).messages;assert.equal(mergeMessages(a,next).length,4);assert.deepEqual(next.map(m=>m.id),a.map(m=>m.id));assert.equal(next.filter(m=>m.role==='user').length,3);
   assert.ok(!JSON.stringify(next).includes('base64'));
+  await p.locator('[data-content-search-unit-key="u3"]').evaluate(e=>{e.innerHTML='<span class="group/composer-attachment"><span class="composer-attachment-surface"><span class="truncate">卡片文件.docx</span><button class="composer-attachment-surface" aria-label="卡片文件.docx"></button></span></span>'});
+  const card=(await p.evaluate(domSnapshot)).messages.find(m=>m.unitId==='u3')!;assert.equal(card.attachedFiles!.length,1);assert.equal(card.attachedFiles![0].name,'卡片文件.docx');
   await p.locator('[data-content-search-unit-key="u1"]').evaluate(e=>{const a=document.createElement("div");a.className="markdown";a.textContent="interleaved response";e.after(a)});assert.deepEqual((await p.evaluate(domSnapshot)).messages.map(m=>m.role),["user","assistant","user","user","assistant"]);
  }finally{await b.close()}
 });
 
 test('a cold connection with no main composer keeps question photos readable and permits explicit dialog cancellation',async()=>{
+ const file=path.join(process.cwd(),'question-file-'+crypto.randomUUID()+'.pdf');fs.writeFileSync(file,'fixture');
  const b=await chromium.launch({executablePath:chrome,headless:true,args:['--remote-debugging-port=19345']});const p=await b.newPage();
  await p.setContent(`<body data-current-thread="one"><div data-turn-key="t"><div data-content-search-unit-key="u"><img alt="用户附件" src="${png}" width="20" height="20"></div></div><div data-codex-composer-request-navigation><h2>等待回答</h2><button role="radio">允许</button><button role="radio">拒绝</button></div><div role="dialog"><h2>确认权限</h2><button>取消</button></div></body>`);
  await p.locator('[role="dialog"] button').evaluate(e=>(e as HTMLButtonElement).onclick=()=>e.parentElement!.remove());
+ await p.evaluate(file=>{const a=document.createElement('div');a.className='markdown';a.innerHTML='<a>成果</a>';a.querySelector('a')!.setAttribute('href',file);document.querySelector('[data-turn-key]')!.append(a)},file);
  const d=new CodexDesktop('http://127.0.0.1:19345',true);
- try{let s=await d.snapshot();assert.ok(s.connected&&s.compatible);assert.ok(s.surfaces!.some(x=>x.kind==='question'));assert.equal(s.messages[0].role,'user');assert.ok((await d.image(s.messages[0].images![0].id)).length>10);const dialog=s.surfaces!.find(x=>x.kind==='dialog')!;await d.operate(op(s,'ui-action',{surfaceId:dialog.id,revision:dialog.revision,actionId:dialog.dismissActionId}));assert.equal(await p.locator('[role="dialog"]').count(),0);assert.ok((await d.snapshot()).compatible)}finally{await d.close();await b.close()}
+ try{let s=await d.snapshot();assert.ok(s.connected&&s.compatible);assert.ok(s.surfaces!.some(x=>x.kind==='question'));assert.equal(s.messages[0].role,'user');assert.ok((await d.image(s.messages[0].images![0].id)).length>10);assert.equal(s.messages.find(m=>m.role==='assistant')!.files!.length,1);await p.locator('.markdown').evaluate(e=>e.remove());s=await d.snapshot();assert.equal(s.messages.find(m=>m.role==='assistant')!.files!.length,1,'cached file cards must survive question-only history virtualization');const dialog=s.surfaces!.find(x=>x.kind==='dialog')!;await d.operate(op(s,'ui-action',{surfaceId:dialog.id,revision:dialog.revision,actionId:dialog.dismissActionId}));assert.equal(await p.locator('[role="dialog"]').count(),0);assert.ok((await d.snapshot()).compatible)}finally{await d.close();await b.close();fs.unlinkSync(file)}
 });

@@ -53,7 +53,7 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
   const fileLinks:ObservedFileLink[]=[];
   // Attachments are siblings of the text bubble. A turn can contain several
   // user messages (steering/replies), so the whole turn is not their owner.
-  const userRoots=Array.from(document.querySelectorAll<HTMLElement>('[data-content-search-unit-key]')).filter(e=>!!e.querySelector('[data-user-message-bubble],[aria-label="用户附件"],[aria-label="User attachment"],img[alt="用户附件"],img[alt="User attachment"],[data-composer-attachment-pill]')||e.hasAttribute('data-local-conversation-user-anchor'));
+  const userRoots=Array.from(document.querySelectorAll<HTMLElement>('[data-content-search-unit-key]')).filter(e=>!!e.querySelector('[data-user-message-bubble],[aria-label="用户附件"],[aria-label="User attachment"],img[alt="用户附件"],img[alt="User attachment"],[data-composer-attachment-pill],[class~="group/composer-attachment"]')||e.hasAttribute('data-local-conversation-user-anchor'));
   const candidates=[...new Set([...userRoots,...Array.from(document.querySelectorAll<HTMLElement>('[data-turn-key] [data-user-message-bubble], [data-turn-key] .markdown, [data-turn-key] .prose, [data-turn-key] [data-markdown-text-style="assistant-message"], [data-message-role], [data-content-search-unit-key] article'))])].filter(e=>!userRoots.some(u=>u!==e&&u.contains(e))).sort((a,b)=>a===b?0:a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1);
   const slots=new Map<string,number>();
   for(const el of candidates){
@@ -72,7 +72,7 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
     const textRoot=role==='user'&&userRoots.includes(el)?el.querySelector('[data-user-message-bubble]'):el;
     let markdown=textRoot?tidy(md(textRoot)).replace(/\n{3,}/g,'\n\n'):'';
     const images=imageRefs(el);images.forEach(i=>usedImages.add(i.id));
-    const attachedFiles=role==='user'?Array.from(el.querySelectorAll<HTMLElement>('[data-composer-attachment-pill]')).map((f,i)=>({id:key+':file:'+i,name:tidy(f.getAttribute('aria-label')||f.textContent||'附件')})).filter(f=>!!f.name):[];
+    const attachedFiles=role==='user'?Array.from(el.querySelectorAll<HTMLElement>('[data-composer-attachment-pill],button.composer-attachment-surface[aria-label],[class~="group/composer-attachment"]:not(:has(button.composer-attachment-surface))')).map((f,i)=>({id:key+':file:'+i,name:tidy(f.getAttribute('aria-label')||f.querySelector('.truncate')?.textContent||f.textContent||'附件')})).filter(f=>!!f.name):[];
     if(!markdown&&!images.length&&!attachedFiles.length)continue;
     const slotKey=key+':'+role,slot=slots.get(slotKey)||0;slots.set(slotKey,slot+1);
     const id=slotKey+':'+slot;
@@ -176,7 +176,7 @@ export class CodexDesktop implements Desktop {
         // main editor. Keep the CDP page and readable state so the next poll can
         // recover, rather than timing out and throwing away the conversation.
         const ui=await p.evaluate(readControls),remote=await this.remoteUi.read(p);
-        if(state.threadId){state.messages=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,state.messages);this.newContext=null;await p.evaluate(()=>document.documentElement.removeAttribute('data-pocket-context-id'));}
+        if(state.threadId){this.newContext=null;await p.evaluate(()=>document.documentElement.removeAttribute('data-pocket-context-id'));}
         const active=await p.locator('[data-app-action-sidebar-thread-active="true"][aria-current="page"]').evaluateAll(es=>[...new Set(es.map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))]);
         const newOwner=await p.evaluate(()=>document.documentElement.getAttribute('data-pocket-context-id'));
         const contextId=state.threadId||(newOwner===this.newContext?newOwner:null)||undefined;
@@ -184,6 +184,7 @@ export class CodexDesktop implements Desktop {
         state.approvals=state.approvals.map(a=>({...a,id:crypto.createHash('sha256').update(a.summary).digest('hex')}));
         if(ui.confirmation)ui.confirmation.id=crypto.createHash('sha256').update(JSON.stringify({contextId,surfaceId:ui.confirmation.surfaceId,summary:ui.confirmation.summary})).digest('hex');
         if(contextId)await this.generatedFiles.observe(contextId,state.messages,fileLinks);
+        if(state.threadId){state.messages=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,state.messages);}
         await this.registerImages(p);
         return {...state,...ui,...remote,connected:true,compatible:canRespond,contextId,screen:state.threadId?'chat':'new',version:'0.4.1',protocolVersion:3,desktopVersion,menu:null,sendEnabled:false,settings:ui.settings.map(s=>({...s,enabled:false,reason:'请先处理当前问答或等待主输入框恢复'})),capabilities:{newChat:false,settings:false},error:canRespond?null:editorCount===0?'电脑主聊天输入框暂不可见，连接仍在。可先处理问答或收起右侧预览；界面恢复后会自动同步。':'电脑出现多个主聊天输入框，已暂停发送以免误操作；请保留一个主聊天，恢复后自动同步。'};
       }
