@@ -21,15 +21,16 @@ export class Transfers{
  }
  get(contextId:string,ids:string[]){return ids.map(id=>{const x=this.uploads.get(id);if(!x||x.contextId!==contextId||Date.now()-x.at>30*60*1000)throw new SafeError('STALE_UPLOAD','附件已过期或不属于当前聊天，请重新选择。');return x})}
  consume(ids:string[]){for(const id of ids)this.uploads.delete(id)}
- async files(id:string|null){
-   if(!id){const roots=[];for(const letter of ['C','D','E','F']){const dir=letter+':\\';if(fs.existsSync(dir))roots.push(this.entry(dir,letter+':',true))}return {name:'电脑磁盘',entries:roots};}
+ async files(id:string|null,directoriesOnly=false){
+   if(!id){const roots=[];for(const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'){const dir=letter+':\\';if(fs.existsSync(dir))roots.push(this.entry(dir,letter+':',true))}return {name:'电脑磁盘',entries:roots};}
    const entry=this.entries.get(id);if(!entry||Date.now()-entry.at>15*60*1000)throw new SafeError('STALE_FOLDER','目录已过期，请返回磁盘列表。');
    const real=await fs.promises.realpath(entry.path);const st=await fs.promises.stat(real);if(!st.isDirectory())throw new SafeError('NOT_FOLDER','这不是文件夹。');
    const items=await fs.promises.readdir(real,{withFileTypes:true});const entries=[];
    if(path.dirname(real)!==real)entries.push(this.entry(path.dirname(real),'上一级',true));
-   for(const item of items.sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name))){if(item.isSymbolicLink()||item.name.startsWith('.'))continue;if(entries.length>=500)break;entries.push(this.entry(path.join(real,item.name),item.name,item.isDirectory()))}
-   return {name:path.basename(real)||real,entries,note:'文件夹用于浏览；选择文件加入附件。最多显示 500 项，每个文件上限 20 MB。'};
+   for(const item of items.sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name))){if(item.isSymbolicLink()||item.name.startsWith('.')||directoriesOnly&&!item.isDirectory())continue;if(entries.length>=500)break;entries.push(this.entry(path.join(real,item.name),item.name,item.isDirectory()))}
+   return {id,name:path.basename(real)||real,path:real,entries,note:directoriesOnly?'选择此文件夹作为工作目录。最多显示 500 项。':'文件夹用于浏览；选择文件加入附件。最多显示 500 项，每个文件上限 20 MB。'};
  }
+ async directory(id:string){const e=this.entries.get(id);if(!e||Date.now()-e.at>15*60*1000)throw new SafeError('STALE_FOLDER','工作目录选择已过期，请重新浏览。');const real=await fs.promises.realpath(e.path);if(real!==e.path||!(await fs.promises.stat(real)).isDirectory())throw new SafeError('FOLDER_CHANGED','目录已变化或不是普通文件夹，请重新选择。');return real;}
  private entry(file:string,name:string,directory:boolean){const id=crypto.randomUUID();this.entries.set(id,{path:file,at:Date.now()});while(this.entries.size>5000)this.entries.delete(this.entries.keys().next().value!);return{id,name,directory}}
  async stageFile(contextId:string,id:string){const e=this.entries.get(id);if(!e||Date.now()-e.at>15*60*1000)throw new SafeError('STALE_FILE','文件选择已过期。');const st=await fs.promises.stat(e.path);if(!st.isFile()||st.size>MAX)throw new SafeError('FILE_SIZE','只能添加不超过 20 MB 的文件，请展开文件夹选择文件。');return this.stage(contextId,path.basename(e.path),await fs.promises.readFile(e.path))}
  async image(p:Page,id:string){

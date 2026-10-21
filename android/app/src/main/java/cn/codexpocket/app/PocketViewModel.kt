@@ -39,7 +39,8 @@ import javax.net.ssl.X509TrustManager
 
 data class UiState(val session: Session?=null,val socketConnected: Boolean=false,val connecting: Boolean=false,val pairing: Boolean=false,val snapshot: Snapshot=Snapshot(),val notice: String?=null,val pendingId: String?=null,val pendingUnknown: Boolean=false,val draft: String="",val clearDraftOnSuccess: Boolean=false,val theme:String="system",
     val uploading:Boolean=false,val staged:List<StagedFile> = emptyList(),val files:FileListing?=null,val filesLoading:Boolean=false,val hiddenMenuId:String?=null,
-    val downloadingId:String?=null,val downloadProgress:Int=0,val openableFile:OpenableFile?=null,val dialogClosePendingId:String?=null){
+    val downloadingId:String?=null,val downloadProgress:Int=0,val openableFile:OpenableFile?=null,val dialogClosePendingId:String?=null,
+    val folders:FileListing?=null,val foldersLoading:Boolean=false,val foldersError:String?=null){
     val remoteMenu:RemoteSurface? get()=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.takeIf{hiddenMenuId==null&&!snapshot.hasModal}
     fun hideMenu()=copy(hiddenMenuId=snapshot.surfaces.lastOrNull{it.kind=="menu"}?.id?:hiddenMenuId)
 }
@@ -67,6 +68,7 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
     private var pendingAttachIds:List<String> = emptyList()
     @Volatile private var downloadTask:FileTransferTask?=null
     private val downloadMutex=Mutex()
+    private var folderRequest=0
     init { if(mutable.value.session!=null)connect() }
 
     private fun pinnedClient(fp: String): OkHttpClient {
@@ -278,7 +280,11 @@ class PocketViewModel(app: Application): AndroidViewModel(app) {
         viewModelScope.launch{try{val body=JSONObject().put("contextId",key).put("id",id).toString().toByteArray();val j=JSONObject(String(api("/api/files/select",body)));if(mine!=generation)return@launch;staged[key]=(staged[key]?:emptyList())+StagedFile(j.getString("id"),j.getString("name"),key);mutable.update{it.copy(staged=staged[it.snapshot.contextId]?:emptyList(),notice="电脑文件已选择，点击“加入聊天”。")}}catch(e:Exception){notice(e.message?:"无法添加此文件。")}finally{mutable.update{it.copy(uploading=false)}}}
     }
     fun select(id:String){if(mutable.value.snapshot.draftPresent){notice("电脑有未发送草稿，请先处理。");return};operate("select",threadId=id)}
-    fun create(projectId:String?){if(mutable.value.snapshot.draftPresent){notice("电脑有未发送草稿，请先处理。");return};operate("create",JSONObject().put("projectId",projectId?:JSONObject.NULL).put("expectedRevision",mutable.value.snapshot.settingsRevision))}
+    fun browseFolders(folder:String?=null){val request=++folderRequest;val epoch=generation;mutable.update{it.copy(folders=null,foldersLoading=true,foldersError=null)}
+        viewModelScope.launch{try{val j=JSONObject(String(api("/api/files?directoriesOnly=1"+(folder?.let{"&folder=$it"}?:""))));if(request==folderRequest&&epoch==generation)mutable.update{it.copy(folders=FileListing.parse(j))}}catch(e:Exception){if(request==folderRequest&&epoch==generation)mutable.update{it.copy(foldersError=e.message?:"无法读取电脑目录。")}}finally{if(request==folderRequest)mutable.update{it.copy(foldersLoading=false)}}}
+    }
+    fun catalog(){val s=mutable.value;if(s.pendingId!=null||!s.socketConnected||!s.snapshot.canLoadCatalog||s.snapshot.hasModal)return;operate("catalog")}
+    fun create(projectId:String?,folderId:String?=null){if(mutable.value.snapshot.draftPresent){notice("电脑有未发送草稿，请先处理。");return};val payload=JSONObject().put("projectId",projectId?:JSONObject.NULL).put("expectedRevision",mutable.value.snapshot.settingsRevision);folderId?.let{payload.put("folderId",it)};operate("create",payload)}
     fun options(key:String){operate("options",JSONObject().put("setting",key).put("expectedRevision",mutable.value.snapshot.settingsRevision))}
     fun setting(key:String,id:String){val menu=mutable.value.snapshot.menu?:return;operate("setting",JSONObject().put("setting",key).put("optionId",id).put("expectedRevision",menu.revision))}
     fun confirm(c:Confirmation,accept:Boolean){operate("confirm",JSONObject().put("confirmationId",c.id).put("decision",if(accept)"accept" else "decline"))}

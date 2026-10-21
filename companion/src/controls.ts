@@ -34,7 +34,8 @@ export function readControls(){
   const dialog=top&&/完[全整]访问|full access|不受限制|unrestricted/i.test(top.innerText)&&top.querySelector('button')?top:null;
   let confirmation:Confirmation|null=null;
   if(dialog){const bs=Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).filter(visible);const a=bs.find(b=>/^(?:允许|确认|启用|继续|Allow|Confirm|Enable|Continue)(?:完[全整]访问(?:权限)?| full access)?$/i.test(b.innerText.trim()));const d=bs.find(b=>/^(?:取消|拒绝|Cancel|Deny)$/i.test(b.innerText.trim()));if(a&&d&&!a.disabled&&!d.disabled&&!dialog.querySelector('input,textarea,select,[contenteditable="true"],[role="checkbox"],[role="radio"]')){let surfaceId=dialog.getAttribute('data-pocket-ui-id');if(!surfaceId){surfaceId=crypto.randomUUID?.()||'10000000-1000-4000-8000-100000000000'.replace(/[018]/g,c=>(Number(c)^crypto.getRandomValues(new Uint8Array(1))[0]&15>>Number(c)/4).toString(16));dialog.setAttribute('data-pocket-ui-id',surfaceId)}confirmation={id:'',surfaceId,summary:dialog.innerText.trim(),acceptLabel:a.innerText.trim(),declineLabel:d.innerText.trim()};}}
-  return{projects,currentProjectId,settings,confirmation,capabilities:{newChat,settings:settings.some(s=>s.enabled)}};
+  const folders=Array.from(document.querySelectorAll('button')).some(b=>visible(b)&&/^(?:Add new project|添加新项目|新建项目|添加项目)$/i.test(b.getAttribute('aria-label')||b.innerText.trim()));
+  return{projects:projects.filter((p,i,a)=>a.findIndex(x=>x.id===p.id)===i),currentProjectId,settings,confirmation,capabilities:{newChat,settings:settings.some(s=>s.enabled),folders,catalog:!!document.querySelector('[data-app-action-sidebar-section]')}};
 }
 
 type Target={label:string,kind:'item'|'slider'|'plan',value?:number};

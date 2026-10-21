@@ -65,6 +65,7 @@ class MainActivity:ComponentActivity(){
     val scanner=rememberLauncherForActivityResult(ScanContract()){r->r.contents?.let{scanned=it}}
     val c=MaterialTheme.colorScheme
     val ready=s.socketConnected&&s.snapshot.compatible&&s.pendingId==null
+    LaunchedEffect(page,drawer.isOpen,s.socketConnected){if(page=="new"||drawer.isOpen)vm.catalog()}
     LaunchedEffect(s.pendingId,s.snapshot.contextId){if(createPending&&s.pendingId==null){createPending=false;if(s.snapshot.screen=="new")page="chat"}}
     LaunchedEffect(s.snapshot.contextId,s.snapshot.modalId,s.snapshot.compatible){if(s.snapshot.hasModal||!s.snapshot.compatible){settingKey=null;approval=null;drawer.close()}}
     if(manual)AlertDialog(onDismissRequest={manual=false},title={Text("粘贴配对内容")},text={OutlinedTextField(value=raw,onValueChange={raw=it},label={Text("电脑上的配对内容")},minLines=4,maxLines=8)},confirmButton={TextButton(onClick={scanned=raw;manual=false;raw=""}){Text("下一步")}},dismissButton={TextButton(onClick={manual=false}){Text("取消")}})
@@ -93,7 +94,8 @@ class MainActivity:ComponentActivity(){
             Row(Modifier.fillMaxWidth().padding(20.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Rounded.Terminal,null,tint=c.primary);Spacer(Modifier.width(10.dp));Text("Codex Pocket",style=MaterialTheme.typography.titleLarge)}
             FilledTonalButton(onClick={scope.launch{drawer.close()};page="new"},enabled=ready&&s.snapshot.canCreate,modifier=Modifier.fillMaxWidth().padding(horizontal=16.dp)){Icon(Icons.Rounded.Add,null);Spacer(Modifier.width(8.dp));Text("新建聊天")}
             OutlinedTextField(value=search,onValueChange={search=it},placeholder={Text("搜索已同步聊天")},leadingIcon={Icon(Icons.Rounded.Search,null)},singleLine=true,modifier=Modifier.fillMaxWidth().padding(16.dp),shape=RoundedCornerShape(14.dp))
-            Text("仅搜索电脑侧栏已同步的聊天",fontSize=11.sp,color=c.onSurfaceVariant,modifier=Modifier.padding(horizontal=24.dp))
+            Text("搜索已同步聊天；打开列表时自动展开桌面更多项目",fontSize=11.sp,color=c.onSurfaceVariant,modifier=Modifier.padding(horizontal=24.dp))
+            TextButton(onClick={vm.catalog()},enabled=ready&&s.snapshot.canLoadCatalog,modifier=Modifier.padding(horizontal=16.dp)){Icon(Icons.Rounded.Refresh,null);Text("加载更多项目和聊天")}
             LazyColumn(Modifier.weight(1f).padding(top=12.dp)){
                 val filtered=s.snapshot.chats.filter{it.title.contains(search,true)}
                 val groups=s.snapshot.projects.filter{p->filtered.any{it.projectId==p.id}}
@@ -120,7 +122,7 @@ class MainActivity:ComponentActivity(){
             val modifier=Modifier.padding(padding)
             if(s.session==null)Onboarding(modifier,s,onScan={scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("扫描电脑配对二维码").setBeepEnabled(false).setOrientationLocked(true))},onManual={manual=true})
             else when(page){
-                "new"->NewChatPage(modifier,s,ready){projectId->createPending=true;vm.create(projectId)}
+                "new"->NewChatPage(modifier,s,ready,vm){projectId,folderId->createPending=true;vm.create(projectId,folderId)}
                 "settings"->SettingsPage(modifier,s,vm){forget=true}
                 else->ChatContent(modifier,s,vm){a,b->approval=a to b}
             }
@@ -141,21 +143,40 @@ class MainActivity:ComponentActivity(){
         Spacer(Modifier.height(28.dp));Button(onClick=onScan,enabled=!s.pairing,modifier=Modifier.fillMaxWidth().height(52.dp)){Icon(Icons.Rounded.QrCodeScanner,null);Spacer(Modifier.width(8.dp));Text(if(s.pairing)"正在连接…" else "扫描电脑二维码")}
         TextButton(onClick=onManual,enabled=!s.pairing,modifier=Modifier.align(Alignment.CenterHorizontally)){Text("无法扫码？粘贴配对内容")}
         s.notice?.let{Text(it,color=c.error,fontSize=13.sp)}
-        Text("个人远程工具 · 0.4.1",color=c.onSurfaceVariant,fontSize=11.sp,modifier=Modifier.padding(top=24.dp))
+        Text("个人远程工具 · 0.4.3",color=c.onSurfaceVariant,fontSize=11.sp,modifier=Modifier.padding(top=24.dp))
     }
 }
 
-@Composable private fun NewChatPage(modifier:Modifier,s:UiState,ready:Boolean,onCreate:(String?)->Unit){
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun NewChatPage(modifier:Modifier,s:UiState,ready:Boolean,vm:PocketViewModel,onCreate:(String?,String?)->Unit){
     var project by remember(s.snapshot.currentProjectId){mutableStateOf(s.snapshot.currentProjectId)}
+    var selectedFolder by remember{mutableStateOf<FileListing?>(null)}
+    var browsing by remember{mutableStateOf(false)}
+    if(browsing)ModalBottomSheet(onDismissRequest={browsing=false}){
+        Column(Modifier.fillMaxWidth().heightIn(max=620.dp).padding(20.dp)){
+            Text("选择电脑工作文件夹",style=MaterialTheme.typography.titleLarge)
+            Text(s.folders?.path?:"选择磁盘，再展开文件夹",style=MaterialTheme.typography.bodySmall,modifier=Modifier.padding(vertical=8.dp))
+            Row{TextButton(onClick={vm.browseFolders()},enabled=!s.foldersLoading){Text("磁盘列表")};TextButton(onClick={vm.browseFolders(s.folders?.id)},enabled=!s.foldersLoading){Text("刷新")}}
+            if(s.foldersLoading)LinearProgressIndicator(Modifier.fillMaxWidth())
+            s.foldersError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+            LazyColumn(Modifier.weight(1f,false).heightIn(max=390.dp)){items(s.folders?.entries?:emptyList(),key={it.id}){f->ListItem(headlineContent={Text(f.name)},leadingContent={Icon(Icons.Rounded.Folder,null)},modifier=Modifier.clickable(enabled=!s.foldersLoading&&s.socketConnected){vm.browseFolders(f.id)})}}
+            Button(onClick={selectedFolder=s.folders;project=null;browsing=false},enabled=!s.foldersLoading&&s.folders?.id!=null&&s.foldersError==null,modifier=Modifier.fillMaxWidth()){Text("使用此文件夹")}
+            TextButton(onClick={browsing=false},modifier=Modifier.fillMaxWidth()){Text("取消")}
+        }
+    }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)){
         Icon(Icons.Rounded.Edit,null,tint=MaterialTheme.colorScheme.primary,modifier=Modifier.size(40.dp));Text("从哪里开始？",style=MaterialTheme.typography.headlineMedium,modifier=Modifier.padding(top=20.dp,bottom=8.dp));Text("选择项目后，会在电脑上打开同一新聊天。",color=MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
-        ListItem(headlineContent={Text("普通本地聊天")},supportingContent={Text("使用桌面新聊天的默认工作位置")},leadingContent={RadioButton(project==null,{project=null})},modifier=Modifier.clickable{project=null})
-        s.snapshot.projects.forEach{p->ListItem(headlineContent={Text(p.title)},leadingContent={RadioButton(project==p.id,{project=p.id})},modifier=Modifier.clickable{project=p.id})}
+        OutlinedButton(onClick={vm.catalog()},enabled=ready&&s.snapshot.canLoadCatalog,modifier=Modifier.fillMaxWidth()){Icon(Icons.Rounded.Refresh,null);Text("加载更多项目和聊天")}
+        ListItem(headlineContent={Text("普通本地聊天")},supportingContent={Text("使用桌面新聊天的默认工作位置")},leadingContent={RadioButton(project==null&&selectedFolder==null,{project=null;selectedFolder=null})},modifier=Modifier.clickable{project=null;selectedFolder=null})
+        ListItem(headlineContent={Text("选择电脑工作文件夹")},supportingContent={Text(selectedFolder?.path?:"浏览电脑磁盘和目录")},leadingContent={Icon(Icons.Rounded.FolderOpen,null)},trailingContent={if(selectedFolder!=null)Icon(Icons.Rounded.CheckCircle,null)},modifier=Modifier.clickable(enabled=ready&&s.snapshot.canBrowseFolders){browsing=true;vm.browseFolders()})
+        if(!s.snapshot.canBrowseFolders)Text("请更新电脑端以启用工作目录选择。",style=MaterialTheme.typography.bodySmall)
+        Text("已有项目",style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(vertical=12.dp))
+        s.snapshot.projects.forEach{p->ListItem(headlineContent={Text(p.title)},leadingContent={RadioButton(project==p.id&&selectedFolder==null,{project=p.id;selectedFolder=null})},modifier=Modifier.clickable{project=p.id;selectedFolder=null})}
         Spacer(Modifier.height(24.dp));s.notice?.let{Notice(it)}
         if(s.snapshot.draftPresent)Notice("电脑有未发送草稿，请先处理。",true)
-        Button(onClick={onCreate(project)},enabled=ready&&s.snapshot.canCreate&&!s.snapshot.draftPresent,modifier=Modifier.fillMaxWidth().height(52.dp)){Icon(Icons.Rounded.Add,null);Spacer(Modifier.width(8.dp));Text(if(s.pendingId!=null)"正在打开…" else "在电脑打开新聊天")}
-        Text("这里只创建输入页，不会自动发送消息。",color=MaterialTheme.colorScheme.onSurfaceVariant,fontSize=12.sp,modifier=Modifier.padding(top=12.dp))
+        Button(onClick={onCreate(project,selectedFolder?.id)},enabled=ready&&s.snapshot.canCreate&&!s.snapshot.draftPresent,modifier=Modifier.fillMaxWidth().height(52.dp)){Icon(Icons.Rounded.Add,null);Spacer(Modifier.width(8.dp));Text(if(s.pendingId!=null)"正在打开…" else "在电脑打开新聊天")}
+        Text(if(selectedFolder!=null)"所选目录会添加为桌面项目。若出现信任确认，请在手机处理，再从项目列表选择新项目打开聊天；不会自动发送消息。" else "这里只创建输入页，不会自动发送消息。",color=MaterialTheme.colorScheme.onSurfaceVariant,fontSize=12.sp,modifier=Modifier.padding(top=12.dp))
     }
 }
 
@@ -168,7 +189,7 @@ class MainActivity:ComponentActivity(){
         SectionLabel("外观")
         listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(value,label)->ListItem(headlineContent={Text(label)},leadingContent={RadioButton(s.theme==value,{vm.theme(value)})},modifier=Modifier.clickable{vm.theme(value)})}
         Spacer(Modifier.height(24.dp));HorizontalDivider();TextButton(onClick=onForget,modifier=Modifier.padding(top=16.dp)){Icon(Icons.Rounded.LinkOff,null);Spacer(Modifier.width(8.dp));Text("解除这台电脑的配对")}
-        Text("Codex Pocket 0.4.1\n手机与桌面共用同一聊天和操作状态。",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=24.dp))
+        Text("Codex Pocket 0.4.3\n手机与桌面共用同一聊天和操作状态。",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=24.dp))
     }
 }
 

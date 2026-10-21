@@ -10,6 +10,7 @@ import {atomicClick} from './ui-action.js';
 import {RemoteUi} from './remote-ui.js';
 import {Transfers} from './transfers.js';
 import {GeneratedFiles,type ObservedFileLink} from './generated-files.js';
+import {loadCatalog,addFolderProject} from './navigation.js';
 import {emptySnapshot,SafeError,type Desktop,type Snapshot,type Operation,type OperationResult,type Message} from './types.js';
 
 const QUESTION_EXCLUSION=':not([data-codex-composer-request-navigation] *):not([class~="@container/request-card"] *):not(form[data-codex-character-input-boundary][data-codex-escape-boundary] *):not([data-app-shell-tab-panel-controller="right"] *)';
@@ -79,9 +80,18 @@ export function domSnapshot():Omit<Snapshot,'connected'|'compatible'|'error'|'ve
     // occupies visible slot zero, but must not overwrite the first commentary.
     // Prefer the desktop message identity; retain positional fallback only for
     // versions/fixtures that do not expose a stable identity.
-    const messageId=el.getAttribute('data-message-id')||el.closest('[data-response-annotation-target]')?.getAttribute('data-response-annotation-target')||unitId?.match(/:(msg_[\w-]+|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i)?.[1];
-    const id=messageId?slotKey+':message:'+messageId:slotKey+':'+slot;
-    messages.push({id,role,markdown,turnId,unitId,slot,images,attachedFiles:attachedFiles.map((f,i)=>({...f,id:id+':file:'+i}))});
+    // A question call can contain several question items sharing an annotation
+    // target. Its structured unit identity includes the item index.
+    const structuredUnit=unitId?.match(/:(\["request_user_input(?:_async)?","[^"\r\n]+",\d+\])$/)?.[1];
+    const messageId=el.getAttribute('data-message-id')||structuredUnit||el.closest('[data-response-annotation-target]')?.getAttribute('data-response-annotation-target')||unitId?.match(/:(msg_[\w-]+|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i)?.[1];
+    // Steering/queued user messages can be regrouped into another turn when the
+    // desktop commits history. A global desktop message ID must not be prefixed
+    // with that mutable turn grouping, or it becomes a second phone message.
+    const id=messageId?role+':message:'+messageId:slotKey+':'+slot;
+    const message:Message={id,role,markdown,turnId,unitId,slot,images,attachedFiles:attachedFiles.map((f,i)=>({...f,id:id+':file:'+i}))};
+    const duplicate=messageId?messages.findIndex(m=>m.id===id):-1;
+    if(duplicate<0)messages.push(message);
+    else if(markdown.length+(images.length+attachedFiles.length)*100>=messages[duplicate].markdown.length+((messages[duplicate].images?.length||0)+(messages[duplicate].attachedFiles?.length||0))*100)messages[duplicate]=message;
     if(role==='assistant')for(const a of el.querySelectorAll('a[href],[data-file-reference][data-markdown-copy-text]'))fileLinks.push({messageId:id,href:a.getAttribute('href')||a.getAttribute('data-markdown-copy-text')||'',label:tidy(a.textContent||'')});
   }
   for(const turn of document.querySelectorAll<HTMLElement>("[data-turn-key]")){
@@ -116,6 +126,11 @@ export function mergeMessages(old:Message[],visible:Message[]):Message[]{
   for(let i=0;i<visible.length;i++){
     const m=visible[i],index=result.findIndex(p=>p.id===m.id);
     if(index>=0){result[index]=m;continue;}
+    // Upgrade a weak user identity only with matching turn, occurrence and
+    // content, and only if the previous ID is absent from this DOM snapshot.
+    // Distinct stable IDs (including identical user text) are never coalesced.
+    const weak=m.role==='user'&&m.id.includes(':message:')&&m.turnId&&m.slot!==undefined?result.findIndex(p=>p.role==='user'&&!p.id.includes(':message:')&&p.turnId===m.turnId&&p.slot===m.slot&&p.markdown===m.markdown&&!visible.some(v=>v.id===p.id)):-1;
+    if(weak>=0){result[weak]=m;continue;}
     const next=visible.slice(i+1).find(n=>result.some(p=>p.id===n.id));
     if(next)result.splice(result.findIndex(p=>p.id===next.id),0,m);else result.push(m);
   }
@@ -191,7 +206,7 @@ export class CodexDesktop implements Desktop {
         if(contextId)await this.generatedFiles.observe(contextId,state.messages,fileLinks);
         if(state.threadId){state.messages=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,state.messages);}
         await this.registerImages(p);
-        return {...state,...ui,...remote,connected:true,compatible:canRespond,contextId,screen:state.threadId?'chat':'new',version:'0.4.2',protocolVersion:3,desktopVersion,menu:null,sendEnabled:false,settings:ui.settings.map(s=>({...s,enabled:false,reason:'请先处理当前问答或等待主输入框恢复'})),capabilities:{newChat:false,settings:false},error:canRespond?null:editorCount===0?'电脑主聊天输入框暂不可见，连接仍在。可先处理问答或收起右侧预览；界面恢复后会自动同步。':'电脑出现多个主聊天输入框，已暂停发送以免误操作；请保留一个主聊天，恢复后自动同步。'};
+        return {...state,...ui,...remote,connected:true,compatible:canRespond,contextId,screen:state.threadId?'chat':'new',version:'0.4.3',protocolVersion:3,desktopVersion,menu:null,sendEnabled:false,settings:ui.settings.map(s=>({...s,enabled:false,reason:'请先处理当前问答或等待主输入框恢复'})),capabilities:{newChat:false,settings:false},error:canRespond?null:editorCount===0?'电脑主聊天输入框暂不可见，连接仍在。可先处理问答或收起右侧预览；界面恢复后会自动同步。':'电脑出现多个主聊天输入框，已暂停发送以免误操作；请保留一个主聊天，恢复后自动同步。'};
       }
       if(!state.threadId){
         this.newContext=await p.locator(COMPOSER).filter({visible:true}).first().evaluate((e,candidate)=>{
@@ -223,7 +238,7 @@ export class CodexDesktop implements Desktop {
       const activeIds=await p.locator('[data-app-action-sidebar-thread-active="true"][aria-current="page"]').evaluateAll(es=>[...new Set(es.map(e=>e.getAttribute('data-app-action-sidebar-thread-id')).filter(Boolean))]);
       const compatible=count===1&&activeIds.length<=1&&(!composerId||composerId===state.threadId);
       if(state.threadId){const merged=mergeMessages(this.cache.get(state.threadId)||[],state.messages);this.cache.set(state.threadId,merged);state.messages=merged;}
-      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.2',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
+      return{...state,connected:true,compatible,error:compatible?null:'当前界面无法唯一定位聊天和输入框，已暂停远程操作。',version:'0.4.3',desktopVersion,protocolVersion:3,contextId,screen:state.threadId?'chat':'new',...ui,...remote,composerContext:this.ownedDraft?.text||'',composerContextEditable:this.ownedDraft?.editable===true,composerRevision:crypto.createHash('sha256').update(JSON.stringify({settingsRevision,placeholder:remote.composerPlaceholder,modes:remote.surfaces.filter(x=>x.kind==='composer')})).digest('hex'),settingsRevision,menu};
     }catch(e){this.page=null;return emptySnapshot(e instanceof SafeError?e.message:'未连接桌面控制入口。请关闭 Codex 后，用配套启动器重新打开。');}
   }
   private async registerImages(p:Page){this.transfers.registerImages(await p.locator('img[data-pocket-image-id]').evaluateAll((es,known)=>es.filter(e=>!known.includes(e.getAttribute('data-pocket-image-id')!)).map(e=>({id:e.getAttribute('data-pocket-image-id')!,src:(e as HTMLImageElement).currentSrc||(e as HTMLImageElement).src})),this.transfers.knownImages()));}
@@ -235,6 +250,7 @@ export class CodexDesktop implements Desktop {
     const guard=await this.snapshot();
     const modal=guard.surfaces?.filter(x=>x.kind==='dialog').at(-1);
     if((guard.confirmation||modal)&&op.type!=='confirm'&&op.type!=='ui-action'&&op.type!=='ui-input')throw new SafeError('DIALOG_OPEN','请先确认或取消手机上显示的桌面弹窗，未操作底层聊天。');
+    if(op.type==='catalog'){const s=await this.check(op.threadId);return sent(await loadCatalog(p,s.contextId!));}
     if(!['confirm','ui-action','ui-input','approve','history','ui-close'].includes(op.type)&&await p.locator(COMPOSER).filter({visible:true}).count()!==1)throw new SafeError('WAITING_FOR_INPUT','电脑正在显示问答或预览，请先处理当前问答；主聊天输入框恢复后即可发送。');
     if(op.type==="ui-open"||op.type==="ui-close"||op.type==="ui-action"||op.type==="ui-input"||op.type==="context-clear"||op.type==="attach"||op.type==="attachment-remove"){
       const s=await this.check(op.threadId);
@@ -262,27 +278,38 @@ export class CodexDesktop implements Desktop {
       throw new SafeError("NOT_CONFIRMED","桌面尚未确认附件，请检查电脑附件，勿重复添加。");
     }
     if(op.type==='create'||op.type==='options'||op.type==='setting'||op.type==='confirm'){
-      const state=await this.check(op.threadId);
+      let state=await this.check(op.threadId);
       if(op.type==='confirm')return sent(await this.controls.confirm(p,state,op.confirmationId,op.decision==='accept'));
       if(op.expectedRevision!==state.settingsRevision)throw new SafeError('SETTINGS_CHANGED','电脑页面或设置已变化，请重试。');
       if(state.confirmation||state.surfaces?.some(x=>x.kind==='dialog'))throw new SafeError('CONFIRMATION','请先处理桌面确认。');
       if(op.type==='options')return sent(await this.controls.options(p,op.setting,state));
       if(op.type==='setting')return sent(await this.controls.apply(p,op.setting,op.optionId,state,()=>this.check(op.threadId)));
       if(state.draftPresent||this.ownedDraft)throw new SafeError('DRAFT','电脑有未发送草稿或已选上下文，请先处理。');
+      let projectId=op.projectId;
+      if(op.folderId){
+        if(projectId)throw new SafeError('BAD_TARGET','不能同时指定项目与工作目录。');
+        const folder=await this.transfers.directory(op.folderId);
+        projectId=await addFolderProject(p,op.threadId,folder,state.projects?.map(x=>x.title)||[],async()=>{
+          const current=await p.evaluate(domSnapshot),context=current.threadId||await p.locator('html').getAttribute('data-pocket-context-id');
+          if(context!==op.threadId||current.draftPresent)throw new SafeError('CHAT_CHANGED','电脑聊天或草稿已变化，未继续设置目录。');
+        });
+        this.newProjectId=projectId;state=await this.snapshot();
+        if(!state.compatible)throw new SafeError('PROJECT_PENDING','目录项目已添加，主输入框尚未恢复；请核对电脑后选择该项目新建聊天。');
+      }
       let button;
-      if(op.projectId){
-        const project=state.projects?.find(x=>x.id===op.projectId);if(!project)throw new SafeError('PROJECT_CHANGED','项目已不在电脑侧栏中。');
+      if(projectId){
+        const project=state.projects?.find(x=>x.id===projectId);if(!project)throw new SafeError('PROJECT_CHANGED','项目已不在电脑侧栏中。');
         const rows=p.locator('[data-app-action-sidebar-project-row]');let row=null;
-        for(let i=0;i<await rows.count();i++)if(await rows.nth(i).getAttribute('data-app-action-sidebar-project-id')===op.projectId){row=rows.nth(i);break;}
+        for(let i=0;i<await rows.count();i++)if(await rows.nth(i).getAttribute('data-app-action-sidebar-project-id')===projectId){row=rows.nth(i);break;}
         if(!row)throw new SafeError('NO_PROJECT','无法定位项目。');
         button=row.getByRole('button',{name:`在 ${project.title} 中开始新聊天`,exact:true});
         if(!await button.count())button=row.getByRole('button',{name:`Start new chat in ${project.title}`,exact:true});
-      }else button=p.locator('button[aria-label="新聊天"],button[aria-label="新建聊天"],button[aria-label="New chat"]').filter({visible:true});
+      }else button=p.getByRole('button',{name:/^(?:新聊天|新建聊天|New chat)$/i}).filter({visible:true});
       if(await button.count()!==1)throw new SafeError('NO_NEW_CHAT','无法唯一定位新聊天按钮。');
-      const fresh=await this.check(op.threadId);if(fresh.draftPresent)throw new SafeError('DRAFT','电脑有未发送草稿。');
-      if(!await button.evaluate(atomicClick,{contextId:op.threadId,emptyDraft:true}))throw new SafeError('CHANGED','聊天或草稿已变化，未新建。');
+      const fresh=await this.check(state.contextId!);if(fresh.draftPresent)throw new SafeError('DRAFT','电脑有未发送草稿。');
+      if(!await button.evaluate(atomicClick,{contextId:state.contextId!,emptyDraft:true}))throw new SafeError('CHANGED','聊天或草稿已变化，未新建。');
       this.newContext=null;
-      this.newProjectId=op.projectId;
+      this.newProjectId=projectId;
       await p.locator(COMPOSER).filter({visible:true}).first().evaluate(e=>e.removeAttribute('data-pocket-context-owner'));
       for(let i=0;i<20;i++){await p.waitForTimeout(150);const now=await this.snapshot();if(now.compatible&&now.contextId!==state.contextId)return sent('已在电脑打开新聊天。');}
       return{id:op.id,status:'unknown',message:'已请求新聊天，请检查桌面是否打开。不会自动重试。'};
@@ -353,7 +380,7 @@ export class CodexDesktop implements Desktop {
   async image(id:string){return this.transfers.image(await this.connect(),id)}
   async download(contextId:string,id:string){return this.generatedFiles.open(contextId,id)}
   async stage(contextId:string,name:string,data:Buffer){await this.check(contextId);return this.transfers.stage(contextId,name,data)}
-  async files(folder:string|null){return this.transfers.files(folder)}
+  async files(folder:string|null,directoriesOnly=false){return this.transfers.files(folder,directoriesOnly)}
   async stageFile(contextId:string,id:string){await this.check(contextId);return this.transfers.stageFile(contextId,id)}
   async close(){if(this.browser){await this.browser.close().catch(()=>{});this.browser=null;this.page=null;}}
 }

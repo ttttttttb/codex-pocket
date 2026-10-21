@@ -1,2 +1,18 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>0.4.1 验证说明</title><style>body{font:16px/1.8 system-ui;margin:30px auto;padding:0 20px;max-width:900px;color:#24352c}h1{font-size:26px}p{white-space:pre-line}a{color:#216c49}</style><body><aside style="padding:20px;background:#edf8f2;color:#163c2b"><h2>0.4.2 电脑端同步修复</h2><p>修复任务完成后最终回复错位。电脑更新至 0.4.2；手机继续使用原签名 0.4.1，无需重装或重新配对。升级电脑请保留 data，只重启配套程序。29 项电脑测试通过，用户已确认手机能看到旧最终回复和新进度，其他场景仍待验收。</p></aside><h1>Codex Pocket 0.4.1 验证说明</h1><p>整理日期：2026-10-21。Android versionCode 5，应用 ID cn.codexpocket.app，minSdk 26，targetSdk 35，协议版本 3（新增兼容字段和受限下载接口）。</p><p>已通过电脑端 20 项自动化测试和安卓 JVM 12 项测试；调试及界面测试 APK 已编译。正式、调试及界面测试 APK 编译成功；正式 APK 经 apksigner 验证，原签名一致，证书 SHA-256：e975458f7d1db785d7a265a51491465e4d5eca15dd0efea6acd6adf7a0de400e。</p><p>新增测试覆盖实际 DOM 普通链接与 data-file-reference 文件标签、中文及带行号文件路径、文件卡片稳定身份、历史与流式合并、已配对下载、聊天归属、未观察 ID、任意路径参数拒绝、授权撤销、私有数据目录、100 MB 上限、文件被修改/删除、长度及 SHA-256 校验、截断和超量数据、手机缓存文件名处理及长中文文件名。</p><p>文件卡片来自助手消息中已加载的真实本地链接，下载只使用不透明 ID；手机请求不能指定任意文件路径。文件按流传输到手机私有缓存，经 FileProvider 临时允许所选应用读取，不要求全部存储访问权限。</p><p>电脑配套程序已部署为 0.4.1，device.json 与 tls.json 升级前后哈希一致，paired=true。当前桌面未开启本机 CDP 9222，connected=false，因此本次新增文件功能尚未在当前真实桌面聊天完成端到端验收。必须等当前任务结束后，用配套启动器重开 Codex，再在手机验证同一文件。此前版本的真实菜单/聊天联调不替代本次新增功能验收。</p><p>当前 ADB 没有已授权安卓设备，未运行模拟器或 connected Android 测试。系统应用选择器、PDF/Office/图片等阅读器、真实手机触屏、下载中取消后重试、Wi-Fi/移动数据切换、休眠恢复和长连接仍待真机验收；不能把编译或单元测试视为这些项目已通过。</p><p>建议真机步骤：不卸载旧版，覆盖安装 0.4.1；确认保留原配对；待重开后的桌面 connected=true/compatible=true；同一聊天生成测试 PDF/DOCX/XLSX，点击手机文件卡片，完成下载并在系统选择器中选阅读器，核对内容。随后测试无阅读器、100 MB 超限、目录、删除/修改、下载取消和网络切换。取消文件下载不得停止 Codex，失败不得自动重发聊天指令。
-</p></body></html>
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>0.4.3 版本与验证说明</title><style>body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:960px;margin:32px auto;padding:20px;line-height:1.8;color:#20332c}pre{white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:27px}</style><h1>0.4.3 版本与验证说明</h1><pre>## 0.4.3 发送、附件、项目和工作目录升级（2026-10-21）
+
+- 修复手机输入文字后发送按钮不可点：桌面空输入框可能禁用 Send，执行中可能只显示 Stop。手机现在允许提交草稿，电脑插入后仍核对实际启用的发送／排队按钮，不会把停止按钮当发送按钮。
+- 修复“＋ → Files and folders”等英文菜单没有弹出手机文件选择的问题。点击文件入口后选择“从手机选择”，会打开安卓系统文件选择器；也保留“从电脑选择”和图片预览。上传后先点击“加入聊天”，再发送。
+- 修复消息归入正式轮次时旧缓存保留副本：消息身份独立于可变轮次；虚拟副本合并，同文字不同消息保留。多题问答按实际题目索引区分，避免共用调用标识导致漏题。部署重启清理旧内存缓存，按“加载更早的消息”重新读取历史。
+- 打开聊天侧栏或新建页时，通过桌面实际 Show more 和展开控件加载项目与聊天；无需先在电脑点 Show more。保留“加载更多项目和聊天”按钮。搜索范围仍为已同步聊天，单次展开有数量与时间上限。
+- 新建页保留普通本地聊天、已有项目，并新增“选择电脑工作文件夹”：磁盘 → 文件夹 → 使用此文件夹 → 在电脑打开新聊天。目录使用短期有效的标识，手机不能提交任意路径或脚本。首次新增目录可能出现“Trust this folder?”；由用户在手机确认或取消，确认后加载项目列表并选择新项目打开聊天。不会自动信任目录、自动重试创建或发送首条消息。
+
+### 升级
+
+手机覆盖安装 Codex-Pocket-0.4.3.apk，选择“更新”，不要卸载。电脑升级到 0.4.3，仅重启配套程序，保留原 data；本机已部署，原证书与授权未变，Codex 未重启。新用户下载 Full-Package.zip，先打开 00-完整安装与使用教程.html。
+
+### 验证和待验收
+
+电脑端 35 项、安卓 JVM 16 项测试通过；正式 APK、调试 APK、界面测试 APK 构建成功，versionCode 7，原签名一致。当前真实 Codex 26.1013.4894.0 connected=true、compatible=true；忙碌空输入框可发送的能力为 true；展开项目后保持当前聊天；消息标识无重复。真实目录拖放触发信任弹窗，新增目录项目随后可见；已有项目新建输入页验证通过，项目一致并切回原聊天，没有发送测试指令。电脑部署状态 paired=true，证书和授权哈希未变。
+
+本次未运行模拟器（没有可用系统镜像），ADB 未连接安卓真机。真机的文件选择器、实际文字／图片收发、重复消息修复、从手机完整走通新目录和信任流程、Wi-Fi／移动数据切换仍待用户覆盖安装后验收；不以构建或桌面检查代替真机结果。
+</pre></html>

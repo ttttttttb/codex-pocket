@@ -55,7 +55,17 @@ export function readRemoteUi(){
  const attachments=Array.from(document.querySelectorAll<HTMLButtonElement>('button')).filter(e=>inChat(e)&&/^移除[“"].+[”"]$|^Remove .+/i.test(label(e))).map(e=>({...action(e),images:images(e.parentElement!)}));
  const send=Array.from(document.querySelectorAll<HTMLButtonElement>('button')).filter(e=>inChat(e)&&/^(?:排队|Queue|Send|Send message|Send prompt|Submit|Submit prompt|发送|发送消息|引导|Steer)(?:\s*\([^)]*\))?$/i.test(label(e))&&!queue.some(q=>document.querySelector(`[data-pocket-ui-id="${q.id}"]`)?.contains(e)));
  const queueRows=queue.filter(q=>{const root=document.querySelector('[data-pocket-ui-id="'+q.id+'"]');return !queue.some(other=>other.id!==q.id&&document.querySelector('[data-pocket-ui-id="'+other.id+'"]')?.contains(root))});
- return {surfaces,queue:queueRows,attachments,composerPlaceholder:document.querySelector('[data-codex-composer][contenteditable="true"]')?.getAttribute('aria-label')||'',sendLabel:send.length===1?label(send[0]):'',sendEnabled:send.length===1&&!send[0].disabled};
+ // A phone draft is not yet in the desktop editor. Empty desktop composers may
+ // disable Send, or replace it with Stop during execution. Allow submitting the
+ // phone draft; operate() inserts it and rechecks the actual enabled Send/Queue
+ // control atomically. Questions, read-only editors and modals stay blocked.
+ const editors=Array.from(document.querySelectorAll<HTMLElement>('[data-codex-composer][contenteditable="true"], [data-codex-composer] [contenteditable="true"], [data-codex-composer-root] .tiptap[contenteditable="true"], [data-composer-markdown][contenteditable="true"], textarea[data-conversation-id]')).filter(e=>inChat(e)&&!!e.offsetHeight&&!e.closest('[data-codex-composer-request-navigation],[class~="@container/request-card"],form[data-codex-character-input-boundary][data-codex-escape-boundary]'));
+ const editor=editors.length===1?editors[0]:null;
+ const empty=editor&&(editor instanceof HTMLTextAreaElement?editor.value:editor.innerText).trim()==='';
+ const stop=footer&&Array.from(footer.querySelectorAll('button')).filter(b=>inChat(b)&&!b.disabled&&/^(?:Stop|Stop task|Stop response|Stop generating|Interrupt|停止|停止任务|停止生成|停止响应|中断)(?:\s*\([^)]*\))?$/i.test(label(b)));
+ const canCompose=!!editor&&!(editor as HTMLTextAreaElement).disabled&&!(editor as HTMLTextAreaElement).readOnly&&editor.getAttribute('aria-disabled')!=='true'&&!surfaces.some(s=>s.kind==='dialog'||s.kind==='question');
+ const sendEnabled=canCompose&&(send.length===1&&(!send[0].disabled&&send[0].getAttribute('aria-disabled')!=='true'||!!empty)||send.length===0&&stop?.length===1);
+ return {surfaces,queue:queueRows,attachments,composerPlaceholder:editor?.getAttribute('aria-label')||'',sendLabel:send.length===1?label(send[0]):'',sendEnabled};
 }
 
 export class RemoteUi{

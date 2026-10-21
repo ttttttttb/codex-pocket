@@ -17,7 +17,7 @@ data class QueueItem(val id:String,val revision:String,val text:String,val actio
     companion object{fun parse(j:JSONObject)=QueueItem(j.getString("id"),j.getString("revision"),j.getString("text"),j.rows("actions"){RemoteAction.parse(it)},j.rows("images"){Picture.parse(it)})}
 }
 data class ComputerFile(val id:String,val name:String,val directory:Boolean)
-data class FileListing(val name:String,val entries:List<ComputerFile>,val note:String){
-    companion object{fun parse(j:JSONObject)=FileListing(j.getString("name"),j.rows("entries"){ComputerFile(it.getString("id"),it.getString("name"),it.getBoolean("directory"))},j.optString("note"))}
+data class FileListing(val name:String,val entries:List<ComputerFile>,val note:String,val id:String?=null,val path:String?=null){
+    companion object{fun parse(j:JSONObject)=FileListing(j.getString("name"),j.rows("entries"){ComputerFile(it.getString("id"),it.getString("name"),it.getBoolean("directory"))},j.optString("note"),j.optString("id").takeIf{it.isNotBlank()&&it!="null"},j.optString("path").takeIf{it.isNotBlank()&&it!="null"})}
 }
 data class StagedFile(val id:String,val name:String,val contextId:String,val preview:ByteArray?=null)

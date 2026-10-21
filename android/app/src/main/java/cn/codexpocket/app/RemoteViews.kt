@@ -54,14 +54,14 @@ import java.io.ByteArrayOutputStream
                 menu.actions.forEach{a->
                     ListItem(headlineContent={Text(a.label)},leadingContent={Icon(if(a.selected)Icons.Rounded.CheckCircle else Icons.Rounded.ChevronRight,null)},modifier=Modifier.clickable(enabled=ready&&!a.disabled){
                         when{
-                            a.label.startsWith("文件和文件夹")-> {vm.closeMenu();sources=true}
-                            a.label.startsWith("绘图")-> {vm.closeMenu();drawing=true}
+                            isFileSourceAction(a.label)-> {vm.closeMenu();sources=true}
+                            isDrawingAction(a.label)-> {vm.closeMenu();drawing=true}
                             a.confirm->confirm=menu to a
                             else->vm.remote(menu,a)
                         }
                     },supportingContent=if(a.disabled){{Text("电脑当前不可用")}}else null)
                 }
-                if(menu.title=="添加内容"&&menu.actions.none{it.label.startsWith("绘图")})ListItem(headlineContent={Text("手机绘图")},supportingContent={Text("画完预览后加入当前聊天")},leadingContent={Icon(Icons.Rounded.Draw,null)},modifier=Modifier.clickable(enabled=ready&&!s.snapshot.draftPresent){vm.closeMenu();drawing=true})
+                if(menu.title=="添加内容"&&menu.actions.none{isDrawingAction(it.label)})ListItem(headlineContent={Text("手机绘图")},supportingContent={Text("画完预览后加入当前聊天")},leadingContent={Icon(Icons.Rounded.Draw,null)},modifier=Modifier.clickable(enabled=ready&&!s.snapshot.draftPresent){vm.closeMenu();drawing=true})
                 if(menu.actions.isEmpty())Text("当前菜单暂无可用操作")
                 s.notice?.let{Text(it,color=MaterialTheme.colorScheme.error)}
             }
